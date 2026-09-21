@@ -12,6 +12,8 @@ public sealed class PipeMetrics
     private static readonly Meter Meter = new(MeterName);
     private static readonly Counter<long> ConsumedC = Meter.CreateCounter<long>("integrationhost.consumed", description: "Messages read from the source");
     private static readonly Counter<long> FilteredC = Meter.CreateCounter<long>("integrationhost.filtered", description: "Messages dropped by TypeFilter");
+    private static readonly Counter<long> MappedC = Meter.CreateCounter<long>("integrationhost.mapped", description: "Messages reshaped by the map");
+    private static readonly Counter<long> UnmappedC = Meter.CreateCounter<long>("integrationhost.unmapped", description: "Messages the map matched nothing for (dropped by OnNoMatch=skip)");
     private static readonly Counter<long> SentC = Meter.CreateCounter<long>("integrationhost.sent", description: "Messages accepted by the destination");
     private static readonly Counter<long> FailedC = Meter.CreateCounter<long>("integrationhost.failed", description: "Failed delivery attempts");
     private static readonly Counter<long> SkippedC = Meter.CreateCounter<long>("integrationhost.skipped", description: "Messages dropped by OnFailure=skip-and-alert");
@@ -21,6 +23,8 @@ public sealed class PipeMetrics
 
     public void Consumed() => ConsumedC.Add(1, tag);
     public void Filtered() => FilteredC.Add(1, tag);
+    public void Mapped() => MappedC.Add(1, tag);
+    public void Unmapped() => UnmappedC.Add(1, tag);
     public void Sent() => SentC.Add(1, tag);
     public void Failed() => FailedC.Add(1, tag);
     public void Skipped() => SkippedC.Add(1, tag);

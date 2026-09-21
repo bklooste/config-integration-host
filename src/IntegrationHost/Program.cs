@@ -58,6 +58,13 @@ if (enabled.Any(UsesRedis))
     builder.Services.AddSingleton<IConnectionMultiplexer>(_ => ConnectionMultiplexer.Connect(redisOptions));
 }
 
+if (enabled.Any(p => !string.IsNullOrWhiteSpace(p.Map?.Template)))
+    builder.Services.AddHttpClient(PipeFactory.RuleEngineClient, c =>
+    {
+        c.BaseAddress = new Uri(host.RuleEngineUrl.TrimEnd('/') + "/");
+        c.Timeout = TimeSpan.FromSeconds(host.RuleEngineTimeoutSeconds);
+    });
+
 foreach (var (pipe, state) in enabled.Zip(states))
 {
     var clientName = "pipe:" + pipe.Name;
@@ -67,7 +74,7 @@ foreach (var (pipe, state) in enabled.Zip(states))
         var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger("Pipe." + pipe.Name);
         var factory = new PipeFactory(sp, host);
         return new PipeRunner(pipe, factory.CreateSource(pipe, logger), factory.CreateDestination(pipe),
-            state, new PipeMetrics(pipe.Name), logger, TimeSpan.FromMilliseconds(host.PollIntervalMs));
+            state, new PipeMetrics(pipe.Name), logger, TimeSpan.FromMilliseconds(host.PollIntervalMs), factory.CreateMapper(pipe));
     });
 }
 builder.Services.Configure<Microsoft.Extensions.Hosting.HostOptions>(o => o.ShutdownTimeout = TimeSpan.FromSeconds(host.ShutdownTimeoutSeconds));

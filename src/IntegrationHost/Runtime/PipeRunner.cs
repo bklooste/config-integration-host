@@ -9,7 +9,7 @@ namespace IntegrationHost.Runtime;
 /// </summary>
 public sealed class PipeRunner(
     PipeConfig pipe, IMessageSource source, IDestination destination,
-    PipeState state, PipeMetrics metrics, ILogger logger, TimeSpan pollInterval) : BackgroundService
+    PipeState state, PipeMetrics metrics, ILogger logger, TimeSpan pollInterval, IMapper? map = null) : BackgroundService
 {
     private static readonly TimeSpan MaxLoopBackoff = TimeSpan.FromSeconds(30);
 
@@ -21,7 +21,7 @@ public sealed class PipeRunner(
         {
             try
             {
-                if (!started) { await source.StartAsync(ct); started = true; state.Running(); }
+                if (!started) { if (map is not null) await map.CheckAsync(ct); await source.StartAsync(ct); started = true; state.Running(); }
                 var batch = await source.ReadAsync(ct);
                 if (batch.Count == 0) { state.Running(); await Task.Delay(pollInterval, ct); continue; }
                 foreach (var message in batch) await ProcessAsync(message, ct);
@@ -69,7 +69,22 @@ public sealed class PipeRunner(
         {
             try
             {
-                await destination.SendAsync(message, ct);
+                var outgoing = message;
+                if (map is not null)
+                {
+                    var mapped = await map.MapAsync(message, ct);
+                    if (mapped is null)
+                    {
+                        if (pipe.Map!.OnNoMatch.Equals("fail", StringComparison.OrdinalIgnoreCase))
+                            throw new InvalidOperationException($"no rule in template '{pipe.Map.Template}' matched");
+                        metrics.Unmapped();
+                        logger.LogWarning("Pipe {Pipe}: message {MessageId} matched no rule in template {Template}; skipped", pipe.Name, message.Id, pipe.Map.Template);
+                        return true;
+                    }
+                    metrics.Mapped();
+                    outgoing = message with { Payload = mapped };
+                }
+                await destination.SendAsync(outgoing, ct);
                 metrics.Sent();
                 state.Delivered();
                 return true;

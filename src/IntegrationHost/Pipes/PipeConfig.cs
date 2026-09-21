@@ -86,8 +86,17 @@ public sealed class SourceConfig
 
 public sealed class MapConfig
 {
-    /// <summary>Template name for a template map (rule-engine-service v2). Not yet supported by this version.</summary>
+    /// <summary>
+    /// Template id in a rule-engine-service (v2). Each message payload is evaluated against it and the merged fragment
+    /// becomes the outgoing payload. Needs <c>Host:RuleEngineUrl</c>.
+    /// </summary>
     public string? Template { get; set; }
+
+    /// <summary>
+    /// What to do when no rule matches (the engine answers <c>{}</c>): <c>skip</c> (default — ack, count as unmapped, send nothing)
+    /// or <c>fail</c> (treat as a delivery failure, so <c>OnFailure</c> applies).
+    /// </summary>
+    public string OnNoMatch { get; set; } = "skip";
 
     /// <summary>Compiled handler name for a code map. Not yet supported by this version.</summary>
     public string? Handler { get; set; }

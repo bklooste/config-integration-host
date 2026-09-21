@@ -4,7 +4,7 @@
 [![Image](https://img.shields.io/badge/ghcr.io-config--integration--host-blue)](https://github.com/bklooste/config-integration-host/pkgs/container/config-integration-host%2Fservice)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-Config-defined integration pipes: move messages between Redis streams, Azure Event Hubs and HTTP endpoints with at-least-once delivery, a dedupe key on every message, retry with backoff, and a failure policy you choose per pipe. Add, change or remove a pipe by editing config — no code, no new service. (Early version: `redis` and `eventhubs` sources, `http`, `redis`, `eventhubs` and `objectstore` (Azure Blob / file) destinations, passthrough map. See [Roadmap](#roadmap).)
+Config-defined integration pipes: move messages between Redis streams, Azure Event Hubs and HTTP endpoints with at-least-once delivery, a dedupe key on every message, retry with backoff, and a failure policy you choose per pipe. Add, change or remove a pipe by editing config — no code, no new service. (Early version: `redis` and `eventhubs` sources, `http`, `redis`, `eventhubs` and `objectstore` (Azure Blob / file) destinations, passthrough and rule-engine template maps. See [Roadmap](#roadmap).)
 
 ## Quick start
 
@@ -82,6 +82,27 @@ An `objectstore` name template must contain `{id}`; tokens are `{id}`, `{type}`,
 exactly as received. With the `file` backend, `/` in a name creates subdirectories and message data can never resolve
 outside the root.
 
+### Template maps
+
+`Map.Template` reshapes a payload with a template stored in a
+[rule-engine-service](https://github.com/bklooste/rule-engine-service) — change a partner's mapping by editing the
+template, with no deploy of the host. The host `POST`s each payload to `v2/templates/{id}/evaluate` and delivers the
+merged fragment. Anything not named in the template's `matchFragment` is dropped, which makes templates a natural place
+to strip internal fields before data leaves.
+
+```jsonc
+"Map": { "Template": "ebets2warehousebets", "OnNoMatch": "skip" }
+// template rule:  { "dataToMatch": { "eventType": "bet" }, "matchFragment": { "betId": "{betId}", "stake": "{amount}" } }
+```
+
+- The engine answers `{}` when nothing matched. The host never forwards that: it is `skip`ped (and counted) or, with
+  `OnNoMatch: fail`, treated as a failure — so a mis-keyed template shows up in metrics or health, not as empty messages at a partner.
+- The template must exist. At start (and on every retry) the host checks it; a missing template or unreachable engine
+  makes the pipe **Faulted** and `/health` 503, with the reason in the body, and the pipe starts on its own once the
+  template appears.
+- An engine outage during delivery is a normal delivery failure: retried, then `OnFailure` applies.
+- The message id (dedupe key) and `traceparent` are unaffected by mapping. The payload must be JSON.
+
 ### Pipe reference
 
 | Key | Default | Description |
@@ -99,7 +120,8 @@ outside the root.
 | `Source.TypeFilter` | _(empty)_ | If set, only these types are delivered; others are acked and counted as filtered. |
 | `Source.BatchSize` | `50` | Messages per read. |
 | `Source.ClaimIdleSeconds` | `60` | Idle time before another replica claims an unacked message. |
-| `Map` | _(omitted)_ | Omitted = passthrough. `Template`/`Handler` are rejected by this version. |
+| `Map.Template` | _(omitted)_ | Omit `Map` for passthrough. A template id in your rule-engine-service: each payload is evaluated against it and the merged result becomes the outgoing payload. See [Template maps](#template-maps). |
+| `Map.OnNoMatch` | `skip` | When no rule matches: `skip` (ack, count `integrationhost.unmapped`, send nothing) or `fail` (a delivery failure, so `OnFailure` applies). |
 | `Destination.Transport` | _(required)_ | `http`, `redis` or `eventhubs`. |
 | `Destination.Url` | _(required for http)_ | Absolute http(s) URL. |
 | `Destination.Method` | `POST` | [http] `POST`, `PUT`, `PATCH` or `DELETE`. |
@@ -134,6 +156,8 @@ Host settings come from environment variables (ASP.NET Core `Section__Key` form)
 | Env var | Type | Default | Description |
 |---|---|---|---|
 | `Host__RedisConnectionString` | string | _(empty)_ | Redis connection string for `redis` sources and destinations. Required when any enabled pipe uses redis. |
+| `Host__RuleEngineUrl` | url | _(empty)_ | Base URL of a [rule-engine-service](https://github.com/bklooste/rule-engine-service) (v2). Required when any enabled pipe has `Map.Template`. |
+| `Host__RuleEngineTimeoutSeconds` | int | `10` | Per-request timeout for rule-engine calls. 1–300. |
 | `Host__ConsumerName` | string | machine name | Consumer name within every pipe's group. Give each replica a distinct name. |
 | `Host__PollIntervalMs` | int | `500` | Wait (ms) before polling again when a stream is empty. 10–60000. |
 | `Host__ShutdownTimeoutSeconds` | int | `30` | Seconds to let in-flight messages finish on shutdown. |
@@ -147,7 +171,7 @@ Host settings come from environment variables (ASP.NET Core `Section__Key` form)
 ## Metrics
 
 OTLP meter `IntegrationHost`, every instrument tagged `pipe`: `integrationhost.consumed`, `.filtered`, `.sent`,
-`.failed` (delivery attempts), `.skipped`. Traces: each message is a span (`<pipe> process`) continuing the producer's trace.
+`.mapped`, `.unmapped`, `.failed` (delivery attempts), `.skipped`. Traces: each message is a span (`<pipe> process`) continuing the producer's trace.
 
 ## API reference
 
@@ -173,7 +197,7 @@ version (`:1.4`), not `:latest`, in production.
 Not in this version — pipes using them are rejected at validation with a clear error rather than ignored:
 
 - Sources/destinations: Kafka; object-store backend `s3`.
-- Maps: templates (`rule-engine-service` v2), compiled code handlers.
+- Maps: compiled code handlers.
 - Per-pipe lag metric.
 
 ## Development

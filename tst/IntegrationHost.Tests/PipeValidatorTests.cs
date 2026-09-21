@@ -48,11 +48,25 @@ public class PipeValidatorTests
     }
 
     [Fact]
-    public void Template_and_handler_maps_are_rejected_until_supported()
+    public void Handler_maps_are_rejected_until_supported()
+    {
+        var p = Good();
+        p.Map = new() { Handler = "AuditToSiem" };
+        Assert.Contains(PipeValidator.Validate([p]), e => e.Contains("Map.Handler"));
+    }
+
+    [Fact]
+    public void A_template_map_needs_a_rule_engine_url_and_a_valid_no_match_mode()
     {
         var p = Good();
         p.Map = new() { Template = "audit-siem-v1" };
-        Assert.Contains(PipeValidator.Validate([p]), e => e.Contains("Map.Template"));
+        Assert.Contains(PipeValidator.Validate([p], new() { RedisConnectionString = "x" }), e => e.Contains("RuleEngineUrl"));
+        Assert.Empty(PipeValidator.Validate([p], new() { RedisConnectionString = "x", RuleEngineUrl = "http://rules:8080" }));
+
+        p.Map.OnNoMatch = "shrug";
+        Assert.Contains(PipeValidator.Validate([p], new() { RedisConnectionString = "x", RuleEngineUrl = "http://rules:8080" }), e => e.Contains("OnNoMatch"));
+        p.Map = new();
+        Assert.Contains(PipeValidator.Validate([p]), e => e.Contains("names no Template"));
     }
 
     [Fact]

@@ -47,7 +47,12 @@ public static class PipeValidator
 
             if (p.Map is { } m)
             {
-                if (!string.IsNullOrWhiteSpace(m.Template)) Err("Map.Template is not supported by this version (template maps are planned); remove Map for passthrough.");
+                if (string.IsNullOrWhiteSpace(m.Template) && string.IsNullOrWhiteSpace(m.Handler)) Err("Map is present but names no Template; remove Map for passthrough.");
+                if (!m.OnNoMatch.Equals("skip", StringComparison.OrdinalIgnoreCase) && !m.OnNoMatch.Equals("fail", StringComparison.OrdinalIgnoreCase))
+                    Err($"Map.OnNoMatch '{m.OnNoMatch}' must be skip or fail.");
+                if (!string.IsNullOrWhiteSpace(m.Template) && p.Enabled && host is not null
+                    && !(Uri.TryCreate(host.RuleEngineUrl, UriKind.Absolute, out var re) && re.Scheme is "http" or "https"))
+                    Err("uses Map.Template but Host:RuleEngineUrl is not set to an absolute http(s) URL.");
                 if (!string.IsNullOrWhiteSpace(m.Handler)) Err("Map.Handler is not supported by this version (code maps are planned); remove Map for passthrough.");
             }
 

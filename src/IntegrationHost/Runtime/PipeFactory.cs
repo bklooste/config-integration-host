@@ -13,6 +13,12 @@ public sealed class PipeFactory(IServiceProvider services, IntegrationHostOption
         var t => throw new InvalidOperationException($"Unknown source transport '{t}'"),
     };
 
+    public IMapper? CreateMapper(PipeConfig pipe) => string.IsNullOrWhiteSpace(pipe.Map?.Template)
+        ? null
+        : new RuleEngineMap(services.GetRequiredService<IHttpClientFactory>().CreateClient(RuleEngineClient), pipe.Map!.Template!);
+
+    public const string RuleEngineClient = "rule-engine";
+
     public IDestination CreateDestination(PipeConfig pipe) => pipe.Destination.Transport.ToLowerInvariant() switch
     {
         "http" => new HttpDestination(services.GetRequiredService<IHttpClientFactory>().CreateClient("pipe:" + pipe.Name), pipe.Destination),

@@ -23,3 +23,13 @@ public interface IDestination
 {
     Task SendAsync(Envelope message, CancellationToken ct);
 }
+
+/// <summary>Reshapes a message payload between source and destination.</summary>
+public interface IMapper
+{
+    /// <summary>Verifies the map can work (e.g. the template exists). Throws with a clear message if not; the runner retries and reports the pipe unhealthy.</summary>
+    Task CheckAsync(CancellationToken ct);
+
+    /// <summary>Returns the new payload, or null when the mapping produced nothing (no rule matched). Throws on any failure.</summary>
+    Task<string?> MapAsync(Envelope message, CancellationToken ct);
+}

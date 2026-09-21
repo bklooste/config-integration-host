@@ -13,6 +13,13 @@ public sealed class IntegrationHostOptions
     /// <summary>Redis connection string for <c>redis</c> sources. Required when any enabled pipe uses a <c>redis</c> source.</summary>
     public string RedisConnectionString { get; set; } = "";
 
+    /// <summary>Base URL of a rule-engine-service (v2) used by <c>Map.Template</c>. Required when any enabled pipe has a template map.</summary>
+    public string RuleEngineUrl { get; set; } = "";
+
+    /// <summary>Per-request timeout (seconds) for rule-engine calls.</summary>
+    [Range(1, 300)]
+    public int RuleEngineTimeoutSeconds { get; set; } = 10;
+
     /// <summary>Consumer name used inside every pipe's consumer group. Give each replica a distinct one; defaults to the machine name.</summary>
     public string ConsumerName { get; set; } = Environment.MachineName;
 
