@@ -39,7 +39,7 @@ public class EventHubsPipeTests(EventHubsFixture eh, RedisFixture redis)
     {
         var stream = Unique("s");
         var mux = await ConnectionMultiplexer.ConnectAsync(redis.ConnectionString);
-        var id = (string)(await mux.GetDatabase().StreamAddAsync(stream, [new("data", """{"n":1}"""), new("type", "Audit")]))!;
+        var id = (string)(await mux.GetDatabase().StreamAddAsync(stream, [new("data", """{"n":1}"""), new("type", "OrderPlaced")]))!;
 
         await using var consumer = new EventHubConsumerClient(EventHubsFixture.Group, EventHubsFixture.EmulatorConnectionString, "eh2");
         await using var host = Host(
@@ -56,7 +56,7 @@ public class EventHubsPipeTests(EventHubsFixture eh, RedisFixture redis)
         {
             if (e.Data is null || !e.Data.Properties.TryGetValue("idempotency-key", out var key) || (string)key != id) continue;
             Assert.Equal("""{"n":1}""", Encoding.UTF8.GetString(e.Data.EventBody.ToArray()));
-            Assert.Equal("Audit", e.Data.Properties["type"]);
+            Assert.Equal("OrderPlaced", e.Data.Properties["type"]);
             return;
         }
         Assert.Fail("event not received");
@@ -102,7 +102,7 @@ public class EventHubsPipeTests(EventHubsFixture eh, RedisFixture redis)
         var mux = await ConnectionMultiplexer.ConnectAsync(redis.ConnectionString);
         await using var producer = new EventHubProducerClient(EventHubsFixture.EmulatorConnectionString, "eh1");
         var data = new EventData(Encoding.UTF8.GetBytes($$"""{"m":"{{marker}}"}"""));
-        data.Properties["type"] = "Audit";
+        data.Properties["type"] = "OrderPlaced";
         await producer.SendAsync([data]);
 
         await using var host = Host(EhSource("eh1", "cg2", Unique("cp")).Concat(
@@ -115,7 +115,7 @@ public class EventHubsPipeTests(EventHubsFixture eh, RedisFixture redis)
         Assert.True(await Receiver.WaitFor(() => mux.GetDatabase().StreamLength(stream) >= 1, Timeout));
         var entry = (await mux.GetDatabase().StreamRangeAsync(stream)).First();
         Assert.Contains(marker, (string)entry["data"]!);
-        Assert.Equal("Audit", (string)entry["type"]!);
+        Assert.Equal("OrderPlaced", (string)entry["type"]!);
         Assert.StartsWith("eh1/", (string)entry["source-id"]!);
     }
 }

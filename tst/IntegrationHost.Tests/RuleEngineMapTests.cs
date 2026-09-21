@@ -57,10 +57,10 @@ public class RuleEngineMapTests(RuleEngineFixture rules) : IClassFixture<RuleEng
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(30);
     private static string Unique(string p) => p + "-" + Guid.NewGuid().ToString("N")[..8];
 
-    // A partner-facing reshaping: only bets are forwarded, renamed, with internal fields dropped.
-    private const string BetTemplate = """
+    // A partner-facing reshaping: only orders are forwarded, renamed, with internal fields dropped.
+    private const string OrderTemplate = """
         {"aggregationField":"id","templates":[
-          {"name":"bets","dataToMatch":{"eventType":"bet"},"matchFragment":{"betId":"{betId}","stake":"{amount}","kind":"warehouse"}}]}
+          {"name":"orders","dataToMatch":{"eventType":"order"},"matchFragment":{"orderId":"{orderId}","total":"{amount}","kind":"fulfilment"}}]}
         """;
 
     private WebApplicationFactory<Program> Host(Receiver receiver, string stream, string template, params (string, string)[] extra) =>
@@ -88,19 +88,19 @@ public class RuleEngineMapTests(RuleEngineFixture rules) : IClassFixture<RuleEng
     public async Task The_real_rule_engine_reshapes_the_payload_before_delivery()
     {
         var template = Unique("t");
-        await rules.PutTemplateAsync(template, BetTemplate);
+        await rules.PutTemplateAsync(template, OrderTemplate);
         var stream = Unique("s");
         await using var receiver = await Receiver.StartAsync();
         var db = await Db();
-        var id = (string)(await db.StreamAddAsync(stream, [new("data", """{"eventType":"bet","betId":"b1","amount":"12.5","customerEmail":"secret@x.com"}""")]))!;
+        var id = (string)(await db.StreamAddAsync(stream, [new("data", """{"eventType":"order","orderId":"o1","amount":"12.5","customerEmail":"secret@x.com"}""")]))!;
 
         await using var host = Host(receiver, stream, template);
         using var client = host.CreateClient();
 
         Assert.True(await Receiver.WaitFor(() => receiver.Calls.Count >= 1, Timeout));
         var call = receiver.Calls.Single();
-        Assert.Contains("\"betId\":\"b1\"", call.Body);
-        Assert.Contains("\"kind\":\"warehouse\"", call.Body);
+        Assert.Contains("\"orderId\":\"o1\"", call.Body);
+        Assert.Contains("\"kind\":\"fulfilment\"", call.Body);
         Assert.DoesNotContain("secret@x.com", call.Body);   // the internal field never leaves
         Assert.Equal(id, call.Headers["Idempotency-Key"]);   // dedupe key unchanged by mapping
     }
@@ -109,19 +109,19 @@ public class RuleEngineMapTests(RuleEngineFixture rules) : IClassFixture<RuleEng
     public async Task Messages_no_rule_matches_are_skipped_not_sent_as_empty_objects()
     {
         var template = Unique("t");
-        await rules.PutTemplateAsync(template, BetTemplate);
+        await rules.PutTemplateAsync(template, OrderTemplate);
         var stream = Unique("s");
         await using var receiver = await Receiver.StartAsync();
         var db = await Db();
         await db.StreamAddAsync(stream, [new("data", """{"eventType":"login","user":"u"}""")]);
-        await db.StreamAddAsync(stream, [new("data", """{"eventType":"bet","betId":"b2","amount":"3"}""")]);
+        await db.StreamAddAsync(stream, [new("data", """{"eventType":"order","orderId":"o2","amount":"3"}""")]);
 
         await using var host = Host(receiver, stream, template);
         using var client = host.CreateClient();
 
         Assert.True(await Receiver.WaitFor(() => receiver.Calls.Count >= 1, Timeout));
         Assert.True(await Receiver.WaitFor(() => db.StreamPending(stream, "g").PendingMessageCount == 0, Timeout));
-        Assert.Contains("b2", Assert.Single(receiver.Calls).Body);
+        Assert.Contains("o2", Assert.Single(receiver.Calls).Body);
     }
 
     [Fact]
@@ -131,7 +131,7 @@ public class RuleEngineMapTests(RuleEngineFixture rules) : IClassFixture<RuleEng
         var stream = Unique("s");
         await using var receiver = await Receiver.StartAsync();
         var db = await Db();
-        await db.StreamAddAsync(stream, [new("data", """{"eventType":"bet","betId":"b3","amount":"1"}""")]);
+        await db.StreamAddAsync(stream, [new("data", """{"eventType":"order","orderId":"o3","amount":"1"}""")]);
 
         await using var host = Host(receiver, stream, template);
         using var client = host.CreateClient();
@@ -146,9 +146,9 @@ public class RuleEngineMapTests(RuleEngineFixture rules) : IClassFixture<RuleEng
         Assert.Contains($"template '{template}' not found", body);
         Assert.Empty(receiver.Calls);
 
-        await rules.PutTemplateAsync(template, BetTemplate); // fixing config needs no host restart
+        await rules.PutTemplateAsync(template, OrderTemplate); // fixing config needs no host restart
 
-        Assert.True(await Receiver.WaitFor(() => receiver.Calls.Any(c => c.Body.Contains("b3")), TimeSpan.FromSeconds(60)));
+        Assert.True(await Receiver.WaitFor(() => receiver.Calls.Any(c => c.Body.Contains("o3")), TimeSpan.FromSeconds(60)));
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/health")).StatusCode);
     }
 
@@ -156,7 +156,7 @@ public class RuleEngineMapTests(RuleEngineFixture rules) : IClassFixture<RuleEng
     public async Task OnNoMatch_fail_applies_the_failure_policy()
     {
         var template = Unique("t");
-        await rules.PutTemplateAsync(template, BetTemplate);
+        await rules.PutTemplateAsync(template, OrderTemplate);
         var stream = Unique("s");
         await using var receiver = await Receiver.StartAsync();
         var db = await Db();

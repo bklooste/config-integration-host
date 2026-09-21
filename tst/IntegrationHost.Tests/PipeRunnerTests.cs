@@ -128,9 +128,9 @@ public class PipeRunnerTests
     {
         var source = new FakeSource();
         var dest = new FakeDestination((_, _) => null);
-        var (runner, _) = Runner(Pipe(FailurePolicy.Block, 3, "Audit"), source, dest);
+        var (runner, _) = Runner(Pipe(FailurePolicy.Block, 3, "OrderPlaced"), source, dest);
 
-        await runner.ProcessAsync(Msg("1", "Audit"), default);
+        await runner.ProcessAsync(Msg("1", "OrderPlaced"), default);
         await runner.ProcessAsync(Msg("2", "Other"), default);
         await runner.ProcessAsync(Msg("3", null), default);
 

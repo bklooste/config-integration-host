@@ -29,9 +29,9 @@ A **pipe** is `source → filter → map → destination`, plus a failure policy
   "Host": { "RedisConnectionString": "redis:6379" },
   "Pipes": [
     {
-      "Name": "audit-to-siem",
-      "Source":      { "Transport": "redis", "Stream": "audit", "ConsumerGroup": "int-audit-siem", "TypeFilter": ["AuditEntry"] },
-      "Destination": { "Transport": "http",  "Url": "https://siem.example/ingest", "Headers": { "Authorization": "Bearer ..." } },
+      "Name": "orders-to-partner",
+      "Source":      { "Transport": "redis", "Stream": "orders", "ConsumerGroup": "int-orders-partner", "TypeFilter": ["OrderPlaced"] },
+      "Destination": { "Transport": "http",  "Url": "https://partner.example/ingest", "Headers": { "Authorization": "Bearer ..." } },
       "OnFailure":   "block",
       "Retry":       { "MaxAttempts": 5, "InitialDelayMs": 200, "MaxDelayMs": 30000 }
     }
@@ -91,8 +91,8 @@ merged fragment. Anything not named in the template's `matchFragment` is dropped
 to strip internal fields before data leaves.
 
 ```jsonc
-"Map": { "Template": "ebets2warehousebets", "OnNoMatch": "skip" }
-// template rule:  { "dataToMatch": { "eventType": "bet" }, "matchFragment": { "betId": "{betId}", "stake": "{amount}" } }
+"Map": { "Template": "orders2fulfilment", "OnNoMatch": "skip" }
+// template rule:  { "dataToMatch": { "eventType": "order" }, "matchFragment": { "orderId": "{orderId}", "total": "{amount}" } }
 ```
 
 - The engine answers `{}` when nothing matched. The host never forwards that: it is `skip`ped (and counted) or, with
@@ -166,7 +166,7 @@ Host settings come from environment variables (ASP.NET Core `Section__Key` form)
 
 **Secrets.** Any setting can be supplied from a file by adding `_FILE` to its env var, e.g.
 `Host__RedisConnectionString_FILE=/run/secrets/redis` or
-`Pipes__0__Destination__Headers__Authorization_FILE=/run/secrets/siem-token`. The host never logs its configuration.
+`Pipes__0__Destination__Headers__Authorization_FILE=/run/secrets/partner-token`. The host never logs its configuration.
 
 ## Metrics
 
