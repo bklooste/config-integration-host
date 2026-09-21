@@ -1,0 +1,165 @@
+# config-integration-host
+
+[![CI](https://github.com/bklooste/config-integration-host/actions/workflows/ci.yml/badge.svg)](https://github.com/bklooste/config-integration-host/actions/workflows/ci.yml)
+[![Image](https://img.shields.io/badge/ghcr.io-config--integration--host-blue)](https://github.com/bklooste/config-integration-host/pkgs/container/config-integration-host%2Fservice)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
+Config-defined integration pipes: move messages from a Redis stream to an external HTTP endpoint with at-least-once delivery, a dedupe key on every message, retry with backoff, and a failure policy you choose per pipe. Add, change or remove a pipe by editing config — no code, no new service. (Early version: `redis` source, `http` destination, passthrough map. See [Roadmap](#roadmap).)
+
+## Quick start
+
+Move a message end to end — Redis stream → host → HTTP endpoint:
+
+```bash
+docker compose up -d
+curl http://localhost:8080/health                     # 200 once the demo pipe is running
+docker compose exec redis redis-cli XADD events '*' data '{"hello":"world"}'
+docker compose logs receiver                          # shows the POST, with an Idempotency-Key header
+```
+
+Images are public on GHCR — no pull secret needed. Multi-arch (`linux/amd64`, `linux/arm64`).
+
+## How it works
+
+A **pipe** is `source → filter → map → destination`, plus a failure policy:
+
+```jsonc
+// appsettings.json (or env: Pipes__0__Name=..., Pipes__0__Source__Stream=...)
+{
+  "Host": { "RedisConnectionString": "redis:6379" },
+  "Pipes": [
+    {
+      "Name": "audit-to-siem",
+      "Source":      { "Transport": "redis", "Stream": "audit", "ConsumerGroup": "int-audit-siem", "TypeFilter": ["AuditEntry"] },
+      "Destination": { "Transport": "http",  "Url": "https://siem.example/ingest", "Headers": { "Authorization": "Bearer ..." } },
+      "OnFailure":   "block",
+      "Retry":       { "MaxAttempts": 5, "InitialDelayMs": 200, "MaxDelayMs": 30000 }
+    }
+  ]
+}
+```
+
+Each pipe reads its stream through its **own consumer group**; replicas of the host share the group, so scale by adding
+replicas (give each a distinct `Host__ConsumerName`).
+
+### Delivery contract
+
+- **At-least-once.** A message is acked (removed from the group's pending list) only *after* the destination accepted it.
+  A crash at any earlier point redelivers it: on restart a consumer re-reads its own unacked entries first, and entries
+  stranded on a dead replica are claimed by another once idle for `ClaimIdleSeconds`.
+- **Dedupe key.** The source message id (the Redis stream id, e.g. `1712345678901-0`) is sent as the `Idempotency-Key`
+  header. Receivers **must** dedupe on it — redelivery is normal, not exceptional.
+- **Trace propagation.** If the stream entry has a `traceparent` field, the outgoing request continues that trace.
+  A `correlationId` / `correlation_id` field is forwarded as `X-Correlation-Id`.
+- **Order.** Messages of one pipe are delivered one at a time, in read order. With `block`, a failing message holds up
+  everything behind it — that is the point.
+- **Failure.** A non-2xx response or a network error is a failure, never swallowed. Retried with exponential backoff
+  (`Retry`), then `OnFailure` applies:
+
+| `OnFailure` | After `MaxAttempts` failures |
+|---|---|
+| `block` (default) | Never acks. Keeps retrying at `MaxDelayMs`, the pipe reports **Blocked** and `/health` returns 503. Nothing is lost; the pipe stalls until the destination recovers. |
+| `skip-and-alert` | Logs an error with the message id, increments `integrationhost.skipped`, acks and moves on. The message is dropped. |
+
+Redis stream entries: the payload is taken from the `data` field (`Source.PayloadField`), the type from `type`
+(`Source.TypeField`). Entries with no payload field are sent as a JSON object of all their fields.
+
+### Pipe reference
+
+| Key | Default | Description |
+|---|---|---|
+| `Name` | _(required)_ | Unique pipe name. Appears in logs, metrics (`pipe` tag) and health. |
+| `Enabled` | `true` | Disabled pipes are still validated but not run — keep them in config, switched off. |
+| `Source.Transport` | _(required)_ | `redis`. |
+| `Source.Stream` | _(required)_ | Stream key exactly as stored (include any prefix). |
+| `Source.ConsumerGroup` | _(required)_ | Consumer group for this pipe. |
+| `Source.StartFrom` | `End` | Where a **new** group starts: `End` (only new messages) or `Beginning` (the whole stream). |
+| `Source.PayloadField` / `TypeField` | `data` / `type` | Stream fields holding payload and type. |
+| `Source.TypeFilter` | _(empty)_ | If set, only these types are delivered; others are acked and counted as filtered. |
+| `Source.BatchSize` | `50` | Messages per read. |
+| `Source.ClaimIdleSeconds` | `60` | Idle time before another replica claims an unacked message. |
+| `Map` | _(omitted)_ | Omitted = passthrough. `Template`/`Handler` are rejected by this version. |
+| `Destination.Transport` | _(required)_ | `http`. |
+| `Destination.Url` | _(required)_ | Absolute http(s) URL. |
+| `Destination.Method` | `POST` | `POST`, `PUT`, `PATCH` or `DELETE`. |
+| `Destination.Headers` | _(empty)_ | Extra request headers. Supply secrets with `..._FILE` env vars. |
+| `Destination.TimeoutSeconds` | `30` | Per-request timeout. |
+| `OnFailure` | `block` | `block` or `skip-and-alert`. |
+| `Retry.MaxAttempts` / `InitialDelayMs` / `MaxDelayMs` | `5` / `200` / `30000` | Backoff doubles from initial up to max. |
+
+### Validate before you deploy
+
+```bash
+docker run --rm -v $PWD/appsettings.json:/app/appsettings.json ghcr.io/bklooste/config-integration-host/service:latest --validate
+# OK: 1 pipe(s) valid, 1 enabled.        (exit 0)
+```
+
+`--validate` checks the whole pipe set — reporting **every** problem, each naming its pipe — and exits without
+connecting to anything. The same checks run at startup; a bad config stops the container with the same message
+instead of failing later at message time.
+
+## Configuration
+
+Host settings come from environment variables (ASP.NET Core `Section__Key` form), an optional mounted
+`appsettings.json`, or both — env wins. Pipes are configured the same way (see above).
+
+| Env var | Type | Default | Description |
+|---|---|---|---|
+| `Host__RedisConnectionString` | string | _(empty)_ | Redis connection string for `redis` sources. Required when any enabled pipe uses one. |
+| `Host__ConsumerName` | string | machine name | Consumer name within every pipe's group. Give each replica a distinct name. |
+| `Host__PollIntervalMs` | int | `500` | Wait (ms) before polling again when a stream is empty. 10–60000. |
+| `Host__ShutdownTimeoutSeconds` | int | `30` | Seconds to let in-flight messages finish on shutdown. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | url | _(unset)_ | Standard OpenTelemetry. Unset = nothing exported. Also honours `OTEL_SERVICE_NAME`, etc. |
+| `ASPNETCORE_HTTP_PORTS` | string | `8080` | Listening port. |
+
+**Secrets.** Any setting can be supplied from a file by adding `_FILE` to its env var, e.g.
+`Host__RedisConnectionString_FILE=/run/secrets/redis` or
+`Pipes__0__Destination__Headers__Authorization_FILE=/run/secrets/siem-token`. The host never logs its configuration.
+
+## Metrics
+
+OTLP meter `IntegrationHost`, every instrument tagged `pipe`: `integrationhost.consumed`, `.filtered`, `.sent`,
+`.failed` (delivery attempts), `.skipped`. Traces: each message is a span (`<pipe> process`) continuing the producer's trace.
+
+## API reference
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/health` | `200` when every pipe is running; `503` if any pipe is starting, **blocked** on a failing message, or cannot reach its source. The body names each pipe and its state. Use for **readiness**. |
+| GET | `/health/live` | `200` while the process is up. Use for **liveness** — a blocked pipe should make the instance unready, not restart it. |
+
+## Deployment
+
+Runs on **any Kubernetes node**; it only needs network access to its dependencies. Redis and the
+destination are external endpoints, never something the service ships or pins a node for.
+
+```bash
+kubectl apply -f deploy/k8s/deployment.yaml
+```
+
+The manifest deliberately has no `nodeSelector`, `affinity` or tolerations. Pin an explicit image
+version (`:1.4`), not `:latest`, in production.
+
+## Roadmap
+
+Not in this version — pipes using them are rejected at validation with a clear error rather than ignored:
+
+- Sources/destinations: Azure Event Hubs, Kafka, object store (Azure Blob / S3 / file).
+- Maps: templates (`rule-engine-service` v2), compiled code handlers.
+- Per-pipe lag metric.
+
+## Development
+
+```bash
+dotnet build IntegrationHost.slnx
+dotnet test IntegrationHost.slnx
+docker build -t config-integration-host .
+```
+
+Versions come from [Nerdbank.GitVersioning](https://github.com/dotnet/Nerdbank.GitVersioning)
+(`version.json`); every push to `main` that passes tests publishes a new patch version. Bump
+`version.json` for a minor/major. See [CHANGELOG.md](CHANGELOG.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Licence
+
+[MIT](LICENSE). Third-party licences of the shipped image are listed in [NOTICE](NOTICE).

@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/IntegrationHost/IntegrationHost.csproj" />
+  </Folder>
+  <Folder Name="/tst/">
+    <Project Path="tst/IntegrationHost.Tests/IntegrationHost.Tests.csproj" />
+  </Folder>
+</Solution>

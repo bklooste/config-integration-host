@@ -1,0 +1,54 @@
+# Node-agnostic on purpose: no nodeSelector, no affinity, no tolerations. The pod runs on any node
+# that can reach its dependencies over the network. Redis and the pipe destinations are external endpoints, not node pins.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: config-integration-host
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: config-integration-host }
+  template:
+    metadata:
+      labels: { app: config-integration-host }
+    spec:
+      containers:
+        - name: service
+          image: ghcr.io/bklooste/config-integration-host/service:1.0   # pin an explicit version
+          ports:
+            - containerPort: 8080
+          env:
+            - name: Host__RedisConnectionString
+              value: redis.default.svc:6379        # your Redis
+            # One entry per pipe (or mount an appsettings.json with a Pipes array):
+            - { name: Pipes__0__Name, value: example-pipe }
+            - { name: Pipes__0__Source__Transport, value: redis }
+            - { name: Pipes__0__Source__Stream, value: events }
+            - { name: Pipes__0__Source__ConsumerGroup, value: int-example }
+            - { name: Pipes__0__Destination__Transport, value: http }
+            - { name: Pipes__0__Destination__Url, value: "https://partner.example/hook" }
+            # Secrets: mount a Secret and point at it instead of a plain value —
+            # - { name: Pipes__0__Destination__Headers__Authorization_FILE, value: /secrets/partner-token }
+            # One replica per pipe set is enough to start; add replicas with distinct Host__ConsumerName (e.g. from the pod name).
+          readinessProbe:                 # 503 while a pipe is blocked/unhealthy
+            httpGet: { path: /health, port: 8080 }
+          livenessProbe:                  # process-up only: a blocked pipe must not restart the pod
+            httpGet: { path: /health/live, port: 8080 }
+            initialDelaySeconds: 10
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { memory: 256Mi }
+          securityContext:
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: config-integration-host
+spec:
+  selector: { app: config-integration-host }
+  ports:
+    - port: 80
+      targetPort: 8080
