@@ -44,6 +44,16 @@ public sealed class SourceConfig
     /// <summary>[redis] Stream key to read, exactly as stored (include any environment prefix).</summary>
     public string Stream { get; set; } = "";
 
+    /// <summary>[redis] Number of partitioned streams. With more than one, <see cref="Stream"/> must contain <c>{partition}</c>, replaced by 0..N-1.</summary>
+    public int Partitions { get; set; } = 1;
+
+    /// <summary>
+    /// [redis] Extra stream-field → header-name mappings, added to the defaults (<c>traceparent</c>, <c>correlationId</c>,
+    /// <c>correlation_id</c>, <c>partitionKey</c>, <c>partition_key</c> map to themselves). Headers feed <c>{correlationId}</c>
+    /// / <c>{partitionKey}</c> in object names, trace propagation and outgoing properties. Example: <c>{"c":"correlationId","k":"partitionKey","p":"traceparent"}</c>.
+    /// </summary>
+    public Dictionary<string, string> HeaderFields { get; set; } = new();
+
     /// <summary>[eventhubs] Connection string. Use this or <see cref="Namespace"/> (managed identity / DefaultAzureCredential).</summary>
     public string ConnectionString { get; set; } = "";
 
@@ -134,7 +144,7 @@ public sealed class DestinationConfig
     /// <summary>[objectstore azure-blob] Storage account URI, accessed with DefaultAzureCredential. Use this or <see cref="ConnectionString"/>.</summary>
     public string ServiceUri { get; set; } = "";
 
-    /// <summary>[objectstore] Object name template. Tokens: <c>{id}</c> (required), <c>{type}</c>, <c>{correlationId}</c>, <c>{partitionKey}</c>, <c>{date}</c> (yyyy/MM/dd, UTC).</summary>
+    /// <summary>[objectstore] Object name template. Tokens: <c>{id}</c> or <c>{entryId}</c> (one required), <c>{type}</c>, <c>{correlationId}</c>, <c>{partitionKey}</c>, <c>{date}</c> (yyyy/MM/dd, UTC).</summary>
     public string NameTemplate { get; set; } = "{type}-{correlationId}-{id}";
 
     /// <summary>[objectstore] Removed from the start of <c>{type}</c> before naming (e.g. a namespace prefix). Empty = keep.</summary>

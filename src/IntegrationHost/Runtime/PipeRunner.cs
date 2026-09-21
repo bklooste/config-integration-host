@@ -82,7 +82,7 @@ public sealed class PipeRunner(
                         return true;
                     }
                     metrics.Mapped();
-                    outgoing = message with { Payload = mapped };
+                    outgoing = message with { Payload = mapped, RawBody = null };
                 }
                 await destination.SendAsync(outgoing, ct);
                 metrics.Sent();

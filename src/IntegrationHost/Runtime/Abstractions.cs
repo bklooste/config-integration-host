@@ -4,7 +4,20 @@ namespace IntegrationHost.Runtime;
 /// One message in flight. <see cref="Id"/> is the source's own identifier (the Redis stream id) and is the
 /// dedupe key propagated to the destination — delivery is at-least-once, so receivers must dedupe on it.
 /// </summary>
-public sealed record Envelope(string Id, string Payload, string? Type, IReadOnlyDictionary<string, string> Headers);
+public sealed record Envelope(string Id, string Payload, string? Type, IReadOnlyDictionary<string, string> Headers)
+{
+    /// <summary>The message body exactly as it arrived, when it may not be valid UTF-8 text. Cleared by a map (the payload is then new).</summary>
+    public byte[]? RawBody { get; init; }
+
+    /// <summary>The source's own id, unqualified (the Redis entry id, without any partition prefix). Available to object names as <c>{entryId}</c>.</summary>
+    public string? EntryId { get; init; }
+
+    /// <summary>Which source stream/partition this came from, so it can be acked there.</summary>
+    public string? SourceStream { get; init; }
+
+    /// <summary>The bytes to store or send verbatim: the raw body if there is one, else the payload as UTF-8.</summary>
+    public byte[] Body => RawBody ?? System.Text.Encoding.UTF8.GetBytes(Payload);
+}
 
 /// <summary>A pull source with explicit acknowledgement. Nothing is acked until the destination has accepted the message.</summary>
 public interface IMessageSource

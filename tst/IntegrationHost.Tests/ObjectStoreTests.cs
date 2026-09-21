@@ -155,4 +155,75 @@ public class ObjectStoreTests(AzuriteFixture azurite, RedisFixture redis) : ICla
         Assert.Contains(PipeValidator.Validate([P(d => d.NameTemplate = "{type}")]), e => e.Contains("{id}"));
         Assert.Contains(PipeValidator.Validate([P(d => d.NameTemplate = "{id}{bogus}")]), e => e.Contains("{bogus}"));
     }
+
+    [Fact]
+    public async Task A_partitioned_stream_with_one_byte_fields_and_a_binary_body_lands_byte_identical_under_the_legacy_names()
+    {
+        // The shape of a stream written by a partitioned, compact-field producer: key "...:{topic}:N", fields b/t/k/c/p.
+        var topic = Unique("topic");
+        var container = Unique("compact");
+        string StreamKey(int part) => $"env:re:s:{{{topic}}}:{part}";
+        var db = (await ConnectionMultiplexer.ConnectAsync(redis.ConnectionString)).GetDatabase();
+        byte[] binary = [0xFF, 0x00, 0xC3, 0x28, 0x7B, 0x22, 0x80]; // not valid UTF-8
+        var sent = new List<(string Id, string Corr, string Key, byte[] Body)>();
+        for (var part = 0; part < 2; part++)
+        {
+            var body = part == 0 ? """{"a":1}"""u8.ToArray() : binary;
+            var id = (string)(await db.StreamAddAsync(StreamKey(part),
+                [new("b", body), new("t", "Acme.Models.Order.Placed"), new("k", $"key{part}"), new("c", $"corr{part}"),
+                 new("p", "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01")]))!;
+            sent.Add((id, $"corr{part}", $"key{part}", body));
+        }
+
+        WebApplicationFactory<Program> Host(string group) => new WebApplicationFactory<Program>().WithWebHostBuilder(b =>
+        {
+            b.UseSetting("Host:RedisConnectionString", redis.ConnectionString);
+            b.UseSetting("Host:PollIntervalMs", "20");
+            b.UseSetting("Pipes:0:Name", "compact");
+            b.UseSetting("Pipes:0:Source:Transport", "redis");
+            b.UseSetting("Pipes:0:Source:Stream", $"env:re:s:{{{topic}}}:{{partition}}");
+            b.UseSetting("Pipes:0:Source:Partitions", "2");
+            b.UseSetting("Pipes:0:Source:ConsumerGroup", group);
+            b.UseSetting("Pipes:0:Source:StartFrom", "Beginning");
+            b.UseSetting("Pipes:0:Source:PayloadField", "b");
+            b.UseSetting("Pipes:0:Source:TypeField", "t");
+            b.UseSetting("Pipes:0:Source:HeaderFields:c", "correlationId");
+            b.UseSetting("Pipes:0:Source:HeaderFields:k", "partitionKey");
+            b.UseSetting("Pipes:0:Source:HeaderFields:p", "traceparent");
+            b.UseSetting("Pipes:0:Destination:Transport", "objectstore");
+            b.UseSetting("Pipes:0:Destination:Backend", "azure-blob");
+            b.UseSetting("Pipes:0:Destination:ConnectionString", azurite.ConnectionString);
+            b.UseSetting("Pipes:0:Destination:Container", container);
+            b.UseSetting("Pipes:0:Destination:NameTemplate", "{type}-{correlationId}-{partitionKey}{entryId}");
+            b.UseSetting("Pipes:0:Destination:StripTypePrefix", "Acme.Models.");
+        });
+
+        bool Drained(string group) => Enumerable.Range(0, 2).All(part =>
+            db.StreamPending(StreamKey(part), group).PendingMessageCount == 0
+            && db.StreamGroupInfo(StreamKey(part)).First(g => g.Name == group).LastDeliveredId == db.StreamInfo(StreamKey(part)).LastGeneratedId);
+
+        var containerClient = new BlobContainerClient(azurite.ConnectionString, container);
+        await using (var host = Host("g"))
+        {
+            using var client = host.CreateClient();
+            Assert.True(await Receiver.WaitFor(() => Drained("g"), TimeSpan.FromSeconds(20)));
+        }
+
+        Assert.Equal(2, containerClient.GetBlobs().Count());
+        foreach (var m in sent)
+        {
+            var blob = containerClient.GetBlobClient(LegacyName("Acme.Models.Order.Placed", m.Corr, m.Key, m.Id)); // legacy name: plain entry id, no partition prefix
+            Assert.True(await blob.ExistsAsync(TestContext.Current.CancellationToken), blob.Name);
+            Assert.Equal(m.Body, (await blob.DownloadContentAsync(TestContext.Current.CancellationToken)).Value.Content.ToArray());
+        }
+
+        // Cutover replay: a brand-new consumer group over the whole stream finds every object already there; create-only writes make it a no-op.
+        var before = containerClient.GetBlobs().ToDictionary(b => b.Name, b => b.Properties.ETag);
+        await using (var host = Host("g-replay"))
+        {
+            using var client = host.CreateClient();
+            Assert.True(await Receiver.WaitFor(() => Drained("g-replay"), TimeSpan.FromSeconds(20)));
+        }
+        Assert.Equal(before, containerClient.GetBlobs().ToDictionary(b => b.Name, b => b.Properties.ETag));
+    }
 }

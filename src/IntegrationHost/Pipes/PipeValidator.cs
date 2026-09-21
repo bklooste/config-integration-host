@@ -29,6 +29,8 @@ public static class PipeValidator
                 case "redis":
                     if (string.IsNullOrWhiteSpace(s.Stream)) Err("Source.Stream is required for a redis source.");
                     if (string.IsNullOrWhiteSpace(s.ConsumerGroup)) Err("Source.ConsumerGroup is required.");
+                    if (s.Partitions is < 1 or > 1024) Err("Source.Partitions must be 1-1024.");
+                    if (s.Partitions > 1 && !s.Stream.Contains("{partition}", StringComparison.Ordinal)) Err("Source.Stream must contain {partition} when Partitions > 1.");
                     if (s.ClaimIdleSeconds < 1) Err("Source.ClaimIdleSeconds must be at least 1.");
                     if (!s.StartFrom.Equals("End", StringComparison.OrdinalIgnoreCase) && !s.StartFrom.Equals("Beginning", StringComparison.OrdinalIgnoreCase))
                         Err($"Source.StartFrom '{s.StartFrom}' must be End or Beginning.");
@@ -93,7 +95,7 @@ public static class PipeValidator
         return errors;
     }
 
-    private static readonly HashSet<string> NameTokens = new(StringComparer.Ordinal) { "id", "type", "correlationId", "partitionKey", "date" };
+    private static readonly HashSet<string> NameTokens = new(StringComparer.Ordinal) { "id", "entryId", "type", "correlationId", "partitionKey", "date" };
 
     private static void ValidateObjectStore(DestinationConfig d, Action<string> err)
     {
@@ -105,7 +107,7 @@ public static class PipeValidator
         var tokens = System.Text.RegularExpressions.Regex.Matches(d.NameTemplate, @"\{([^{}]*)\}").Select(m => m.Groups[1].Value).ToList();
         foreach (var t in tokens.Where(t => !NameTokens.Contains(t)).Distinct())
             err($"Destination.NameTemplate has unknown token '{{{t}}}' (allowed: {string.Join(", ", NameTokens.Select(n => "{" + n + "}"))}).");
-        if (!tokens.Contains("id")) err("Destination.NameTemplate must contain {id}, or distinct messages would overwrite/skip each other.");
+        if (!tokens.Contains("id") && !tokens.Contains("entryId")) err("Destination.NameTemplate must contain {id} or {entryId}, or distinct messages would overwrite/skip each other.");
     }
 
     private static void ValidateEventHubs(string side, string connectionString, string ns, string hub, Action<string> err)

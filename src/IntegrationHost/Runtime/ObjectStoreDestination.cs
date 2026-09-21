@@ -22,7 +22,7 @@ public interface IObjectStore
 public sealed partial class ObjectStoreDestination(IObjectStore store, DestinationConfig config) : IDestination
 {
     public async Task SendAsync(Envelope message, CancellationToken ct) =>
-        await store.PutIfAbsentAsync(Name(message), Encoding.UTF8.GetBytes(message.Payload), ct);
+        await store.PutIfAbsentAsync(Name(message), message.Body, ct);
 
     internal string Name(Envelope m)
     {
@@ -32,6 +32,7 @@ public sealed partial class ObjectStoreDestination(IObjectStore store, Destinati
         return Token().Replace(config.NameTemplate, t => t.Groups[1].Value switch
         {
             "id" => m.Id,
+            "entryId" => m.EntryId ?? m.Id,
             "type" => type,
             "correlationId" => m.Headers.GetValueOrDefault("correlationId") ?? m.Headers.GetValueOrDefault("correlation_id") ?? "",
             "partitionKey" => m.Headers.GetValueOrDefault("partitionKey") ?? m.Headers.GetValueOrDefault("partition_key") ?? "",
