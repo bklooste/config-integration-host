@@ -24,12 +24,25 @@ public static class PipeValidator
 
             // Disabled pipes are still checked: a broken commented-out pipe should not be a surprise when it is enabled.
             var s = p.Source;
-            if (!string.Equals(s.Transport, "redis", StringComparison.OrdinalIgnoreCase))
-                Err($"Source.Transport '{s.Transport}' is not supported (supported: redis).");
-            if (string.IsNullOrWhiteSpace(s.Stream)) Err("Source.Stream is required.");
-            if (string.IsNullOrWhiteSpace(s.ConsumerGroup)) Err("Source.ConsumerGroup is required.");
-            if (!s.StartFrom.Equals("End", StringComparison.OrdinalIgnoreCase) && !s.StartFrom.Equals("Beginning", StringComparison.OrdinalIgnoreCase))
-                Err($"Source.StartFrom '{s.StartFrom}' must be End or Beginning.");
+            switch (s.Transport.ToLowerInvariant())
+            {
+                case "redis":
+                    if (string.IsNullOrWhiteSpace(s.Stream)) Err("Source.Stream is required for a redis source.");
+                    if (string.IsNullOrWhiteSpace(s.ConsumerGroup)) Err("Source.ConsumerGroup is required.");
+                    if (s.ClaimIdleSeconds < 1) Err("Source.ClaimIdleSeconds must be at least 1.");
+                    if (!s.StartFrom.Equals("End", StringComparison.OrdinalIgnoreCase) && !s.StartFrom.Equals("Beginning", StringComparison.OrdinalIgnoreCase))
+                        Err($"Source.StartFrom '{s.StartFrom}' must be End or Beginning.");
+                    break;
+                case "eventhubs":
+                    ValidateEventHubs("Source", s.ConnectionString, s.Namespace, s.EventHub, Err);
+                    if (string.IsNullOrWhiteSpace(s.ConsumerGroup)) Err("Source.ConsumerGroup is required (e.g. $Default).");
+                    if (string.IsNullOrWhiteSpace(s.CheckpointConnectionString) == string.IsNullOrWhiteSpace(s.CheckpointContainerUri))
+                        Err("Source needs exactly one of CheckpointConnectionString or CheckpointContainerUri (an eventhubs source must checkpoint).");
+                    break;
+                default:
+                    Err($"Source.Transport '{s.Transport}' is not supported (supported: redis, eventhubs).");
+                    break;
+            }
             if (s.BatchSize is < 1 or > 1000) Err("Source.BatchSize must be 1-1000.");
 
             if (p.Map is { } m)
@@ -39,21 +52,30 @@ public static class PipeValidator
             }
 
             var d = p.Destination;
-            if (!string.Equals(d.Transport, "http", StringComparison.OrdinalIgnoreCase))
-                Err($"Destination.Transport '{d.Transport}' is not supported (supported: http).");
-            else
+            switch (d.Transport.ToLowerInvariant())
             {
-                if (!Uri.TryCreate(d.Url, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https"))
-                    Err($"Destination.Url '{d.Url}' must be an absolute http(s) URL.");
-                if (!Methods.Contains(d.Method)) Err($"Destination.Method '{d.Method}' must be one of {string.Join(", ", Methods)}.");
-                if (d.TimeoutSeconds is < 1 or > 3600) Err("Destination.TimeoutSeconds must be 1-3600.");
+                case "http":
+                    if (!Uri.TryCreate(d.Url, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https"))
+                        Err($"Destination.Url '{d.Url}' must be an absolute http(s) URL.");
+                    if (!Methods.Contains(d.Method)) Err($"Destination.Method '{d.Method}' must be one of {string.Join(", ", Methods)}.");
+                    if (d.TimeoutSeconds is < 1 or > 3600) Err("Destination.TimeoutSeconds must be 1-3600.");
+                    break;
+                case "redis":
+                    if (string.IsNullOrWhiteSpace(d.Stream)) Err("Destination.Stream is required for a redis destination.");
+                    if (d.MaxLength < 0) Err("Destination.MaxLength must be >= 0.");
+                    break;
+                case "eventhubs":
+                    ValidateEventHubs("Destination", d.ConnectionString, d.Namespace, d.EventHub, Err);
+                    break;
+                default:
+                    Err($"Destination.Transport '{d.Transport}' is not supported (supported: http, redis, eventhubs).");
+                    break;
             }
 
             if (!PipeConfig.TryParsePolicy(p.OnFailure, out _)) Err($"OnFailure '{p.OnFailure}' must be block or skip-and-alert.");
-            if (s.ClaimIdleSeconds < 1) Err("Source.ClaimIdleSeconds must be at least 1.");
-            if (p.Enabled && host is not null && string.Equals(s.Transport, "redis", StringComparison.OrdinalIgnoreCase)
-                && string.IsNullOrWhiteSpace(host.RedisConnectionString))
-                Err("uses a redis source but Host:RedisConnectionString is not set.");
+            if (p.Enabled && host is not null && string.IsNullOrWhiteSpace(host.RedisConnectionString)
+                && (s.Transport.Equals("redis", StringComparison.OrdinalIgnoreCase) || d.Transport.Equals("redis", StringComparison.OrdinalIgnoreCase)))
+                Err("uses redis but Host:RedisConnectionString is not set.");
 
             var r = p.Retry;
             if (r.MaxAttempts < 1) Err("Retry.MaxAttempts must be at least 1.");
@@ -61,6 +83,14 @@ public static class PipeValidator
         }
 
         return errors;
+    }
+
+    private static void ValidateEventHubs(string side, string connectionString, string ns, string hub, Action<string> err)
+    {
+        if (string.IsNullOrWhiteSpace(hub)) err($"{side}.EventHub is required for an eventhubs {side.ToLowerInvariant()}.");
+        var hasCs = !string.IsNullOrWhiteSpace(connectionString);
+        var hasNs = !string.IsNullOrWhiteSpace(ns);
+        if (hasCs == hasNs) err($"{side} needs exactly one of ConnectionString or Namespace (managed identity).");
     }
 
     /// <summary>Throws with every error listed, so a bad config fails the container at start with a readable message.</summary>

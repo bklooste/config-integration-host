@@ -38,13 +38,31 @@ public sealed class PipeConfig
 
 public sealed class SourceConfig
 {
-    /// <summary><c>redis</c>. (<c>eventhubs</c> and <c>kafka</c> are planned.)</summary>
+    /// <summary><c>redis</c> or <c>eventhubs</c>. (<c>kafka</c> is planned.)</summary>
     public string Transport { get; set; } = "";
 
-    /// <summary>Redis stream key to read, exactly as stored (include any environment prefix).</summary>
+    /// <summary>[redis] Stream key to read, exactly as stored (include any environment prefix).</summary>
     public string Stream { get; set; } = "";
 
-    /// <summary>Consumer group for this pipe. One group per pipe; replicas share it.</summary>
+    /// <summary>[eventhubs] Connection string. Use this or <see cref="Namespace"/> (managed identity / DefaultAzureCredential).</summary>
+    public string ConnectionString { get; set; } = "";
+
+    /// <summary>[eventhubs] Fully-qualified namespace, e.g. <c>myns.servicebus.windows.net</c>.</summary>
+    public string Namespace { get; set; } = "";
+
+    /// <summary>[eventhubs] Event hub name.</summary>
+    public string EventHub { get; set; } = "";
+
+    /// <summary>[eventhubs] Blob storage connection string for checkpoints. Use this or <see cref="CheckpointContainerUri"/>.</summary>
+    public string CheckpointConnectionString { get; set; } = "";
+
+    /// <summary>[eventhubs] Full blob container URI for checkpoints, accessed with DefaultAzureCredential.</summary>
+    public string CheckpointContainerUri { get; set; } = "";
+
+    /// <summary>[eventhubs] Checkpoint container name (with <see cref="CheckpointConnectionString"/>); created if missing.</summary>
+    public string CheckpointContainer { get; set; } = "integration-host-checkpoints";
+
+    /// <summary>Consumer group for this pipe. One group per pipe; replicas share it. For eventhubs use an event hub consumer group (e.g. <c>$Default</c>).</summary>
     public string ConsumerGroup { get; set; } = "";
 
     /// <summary>Where a brand-new group starts: <c>End</c> (default, only new messages) or <c>Beginning</c> (the whole stream).</summary>
@@ -77,14 +95,35 @@ public sealed class MapConfig
 
 public sealed class DestinationConfig
 {
-    /// <summary><c>http</c>. (<c>eventhubs</c>, <c>kafka</c> and <c>objectstore</c> are planned.)</summary>
+    /// <summary><c>http</c>, <c>redis</c> or <c>eventhubs</c>. (<c>kafka</c> and <c>objectstore</c> are planned.)</summary>
     public string Transport { get; set; } = "";
 
-    /// <summary>Absolute http(s) URL the payload is sent to.</summary>
+    /// <summary>[http] Absolute http(s) URL the payload is sent to.</summary>
     public string Url { get; set; } = "";
 
+    /// <summary>[redis] Stream key to append to.</summary>
+    public string Stream { get; set; } = "";
+
+    /// <summary>[redis] Approximate max stream length (XADD MAXLEN ~). 0 = unbounded.</summary>
+    public int MaxLength { get; set; }
+
+    /// <summary>[eventhubs] Connection string. Use this or <see cref="Namespace"/> (managed identity / DefaultAzureCredential).</summary>
+    public string ConnectionString { get; set; } = "";
+
+    /// <summary>[eventhubs] Fully-qualified namespace, e.g. <c>myns.servicebus.windows.net</c>.</summary>
+    public string Namespace { get; set; } = "";
+
+    /// <summary>[eventhubs] Event hub name.</summary>
+    public string EventHub { get; set; } = "";
+
+    /// <summary>[eventhubs] Partition key for ordering; omitted = service-chosen partition.</summary>
+    public string PartitionKey { get; set; } = "";
+
+    /// <summary>[http] Method.</summary>
     public string Method { get; set; } = "POST";
+    /// <summary>[http] Extra request headers.</summary>
     public Dictionary<string, string> Headers { get; set; } = new();
+    /// <summary>[http] Per-request timeout.</summary>
     public int TimeoutSeconds { get; set; } = 30;
 }
 

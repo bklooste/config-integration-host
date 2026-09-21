@@ -4,7 +4,7 @@
 [![Image](https://img.shields.io/badge/ghcr.io-config--integration--host-blue)](https://github.com/bklooste/config-integration-host/pkgs/container/config-integration-host%2Fservice)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-Config-defined integration pipes: move messages from a Redis stream to an external HTTP endpoint with at-least-once delivery, a dedupe key on every message, retry with backoff, and a failure policy you choose per pipe. Add, change or remove a pipe by editing config — no code, no new service. (Early version: `redis` source, `http` destination, passthrough map. See [Roadmap](#roadmap).)
+Config-defined integration pipes: move messages between Redis streams, Azure Event Hubs and HTTP endpoints with at-least-once delivery, a dedupe key on every message, retry with backoff, and a failure policy you choose per pipe. Add, change or remove a pipe by editing config — no code, no new service. (Early version: `redis` and `eventhubs` sources, `http`, `redis` and `eventhubs` destinations, passthrough map. See [Roadmap](#roadmap).)
 
 ## Quick start
 
@@ -64,26 +64,43 @@ replicas (give each a distinct `Host__ConsumerName`).
 Redis stream entries: the payload is taken from the `data` field (`Source.PayloadField`), the type from `type`
 (`Source.TypeField`). Entries with no payload field are sent as a JSON object of all their fields.
 
+### Transports
+
+| Transport | As source | As destination | Dedupe key |
+|---|---|---|---|
+| `redis` | Consumer group; ack after delivery; pending + dead-replica recovery | `XADD` (payload in `data`, plus `type`, `source-id`, propagated headers) | Stream id (`1712345678901-0`); destination stores it as `source-id` |
+| `eventhubs` | `EventProcessorClient` with blob checkpoints; one in-flight event per partition, checkpointed only after delivery | One event per message; `MessageId` + `idempotency-key` property | `hub/partition/sequenceNumber` |
+| `http` | — | One request per message; non-2xx = failure | `Idempotency-Key` header |
+
+Any source can feed any destination. Event Hubs has no idempotent producer, so an `eventhubs` destination can
+duplicate on retry — its consumers must dedupe on `idempotency-key`. An `eventhubs` source checkpoints after **every**
+delivered event (one blob write each), which favours correctness over throughput.
+
 ### Pipe reference
 
 | Key | Default | Description |
 |---|---|---|
 | `Name` | _(required)_ | Unique pipe name. Appears in logs, metrics (`pipe` tag) and health. |
 | `Enabled` | `true` | Disabled pipes are still validated but not run — keep them in config, switched off. |
-| `Source.Transport` | _(required)_ | `redis`. |
-| `Source.Stream` | _(required)_ | Stream key exactly as stored (include any prefix). |
-| `Source.ConsumerGroup` | _(required)_ | Consumer group for this pipe. |
-| `Source.StartFrom` | `End` | Where a **new** group starts: `End` (only new messages) or `Beginning` (the whole stream). |
-| `Source.PayloadField` / `TypeField` | `data` / `type` | Stream fields holding payload and type. |
+| `Source.Transport` | _(required)_ | `redis` or `eventhubs`. |
+| `Source.Stream` | _(required for redis)_ | Stream key exactly as stored (include any prefix). |
+| `Source.ConsumerGroup` | _(required)_ | Consumer group for this pipe (for `eventhubs`: an event hub consumer group, e.g. `$Default`). |
+| `Source.StartFrom` | `End` | [redis] Where a **new** group starts: `End` (only new messages) or `Beginning` (the whole stream). |
+| `Source.PayloadField` / `TypeField` | `data` / `type` | [redis] Stream fields holding payload and type. (`eventhubs`: body is the payload, `type` is an event property.) |
+| `Source.ConnectionString` / `Namespace` | — | [eventhubs] Exactly one: a connection string, or a fully-qualified namespace (uses `DefaultAzureCredential` / managed identity). |
+| `Source.EventHub` | _(required for eventhubs)_ | Event hub name. |
+| `Source.CheckpointConnectionString` / `CheckpointContainerUri` | — | [eventhubs] Exactly one: blob connection string (+ `CheckpointContainer`, default `integration-host-checkpoints`, created if missing), or a full container URI (`DefaultAzureCredential`). |
 | `Source.TypeFilter` | _(empty)_ | If set, only these types are delivered; others are acked and counted as filtered. |
 | `Source.BatchSize` | `50` | Messages per read. |
 | `Source.ClaimIdleSeconds` | `60` | Idle time before another replica claims an unacked message. |
 | `Map` | _(omitted)_ | Omitted = passthrough. `Template`/`Handler` are rejected by this version. |
-| `Destination.Transport` | _(required)_ | `http`. |
-| `Destination.Url` | _(required)_ | Absolute http(s) URL. |
-| `Destination.Method` | `POST` | `POST`, `PUT`, `PATCH` or `DELETE`. |
-| `Destination.Headers` | _(empty)_ | Extra request headers. Supply secrets with `..._FILE` env vars. |
-| `Destination.TimeoutSeconds` | `30` | Per-request timeout. |
+| `Destination.Transport` | _(required)_ | `http`, `redis` or `eventhubs`. |
+| `Destination.Url` | _(required for http)_ | Absolute http(s) URL. |
+| `Destination.Method` | `POST` | [http] `POST`, `PUT`, `PATCH` or `DELETE`. |
+| `Destination.Headers` | _(empty)_ | [http] Extra request headers. Supply secrets with `..._FILE` env vars. |
+| `Destination.TimeoutSeconds` | `30` | [http] Per-request timeout. |
+| `Destination.Stream` / `MaxLength` | _(required for redis)_ / `0` | [redis] Stream to append to; approximate max length (0 = unbounded). |
+| `Destination.ConnectionString` / `Namespace` / `EventHub` / `PartitionKey` | — | [eventhubs] As for the source; `PartitionKey` (optional) keeps related events ordered. |
 | `OnFailure` | `block` | `block` or `skip-and-alert`. |
 | `Retry.MaxAttempts` / `InitialDelayMs` / `MaxDelayMs` | `5` / `200` / `30000` | Backoff doubles from initial up to max. |
 
@@ -105,7 +122,7 @@ Host settings come from environment variables (ASP.NET Core `Section__Key` form)
 
 | Env var | Type | Default | Description |
 |---|---|---|---|
-| `Host__RedisConnectionString` | string | _(empty)_ | Redis connection string for `redis` sources. Required when any enabled pipe uses one. |
+| `Host__RedisConnectionString` | string | _(empty)_ | Redis connection string for `redis` sources and destinations. Required when any enabled pipe uses redis. |
 | `Host__ConsumerName` | string | machine name | Consumer name within every pipe's group. Give each replica a distinct name. |
 | `Host__PollIntervalMs` | int | `500` | Wait (ms) before polling again when a stream is empty. 10–60000. |
 | `Host__ShutdownTimeoutSeconds` | int | `30` | Seconds to let in-flight messages finish on shutdown. |
@@ -144,7 +161,7 @@ version (`:1.4`), not `:latest`, in production.
 
 Not in this version — pipes using them are rejected at validation with a clear error rather than ignored:
 
-- Sources/destinations: Azure Event Hubs, Kafka, object store (Azure Blob / S3 / file).
+- Sources/destinations: Kafka, object store (Azure Blob / S3 / file).
 - Maps: templates (`rule-engine-service` v2), compiled code handlers.
 - Per-pipe lag metric.
 

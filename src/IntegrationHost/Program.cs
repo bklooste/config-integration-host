@@ -48,7 +48,10 @@ PipeValidator.ThrowIfInvalid(pipes, host);
 var enabled = pipes.Where(p => p.Enabled).ToList();
 var states = enabled.Select(p => new PipeState(p.Name)).ToList();
 
-if (enabled.Count > 0)
+static bool UsesRedis(PipeConfig p) =>
+    p.Source.Transport.Equals("redis", StringComparison.OrdinalIgnoreCase) || p.Destination.Transport.Equals("redis", StringComparison.OrdinalIgnoreCase);
+
+if (enabled.Any(UsesRedis))
 {
     var redisOptions = ConfigurationOptions.Parse(host.RedisConnectionString);
     redisOptions.AbortOnConnectFail = false; // an unreachable broker is a health failure, not a crash
@@ -59,13 +62,13 @@ foreach (var (pipe, state) in enabled.Zip(states))
 {
     var clientName = "pipe:" + pipe.Name;
     builder.Services.AddHttpClient(clientName, c => c.Timeout = TimeSpan.FromSeconds(pipe.Destination.TimeoutSeconds));
-    builder.Services.AddSingleton<IHostedService>(sp => new PipeRunner(
-        pipe,
-        new RedisStreamSource(sp.GetRequiredService<IConnectionMultiplexer>(), pipe.Source, host.ConsumerName),
-        new HttpDestination(sp.GetRequiredService<IHttpClientFactory>().CreateClient(clientName), pipe.Destination),
-        state, new PipeMetrics(pipe.Name),
-        sp.GetRequiredService<ILoggerFactory>().CreateLogger("Pipe." + pipe.Name),
-        TimeSpan.FromMilliseconds(host.PollIntervalMs)));
+    builder.Services.AddSingleton<IHostedService>(sp =>
+    {
+        var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger("Pipe." + pipe.Name);
+        var factory = new PipeFactory(sp, host);
+        return new PipeRunner(pipe, factory.CreateSource(pipe, logger), factory.CreateDestination(pipe),
+            state, new PipeMetrics(pipe.Name), logger, TimeSpan.FromMilliseconds(host.PollIntervalMs));
+    });
 }
 builder.Services.Configure<Microsoft.Extensions.Hosting.HostOptions>(o => o.ShutdownTimeout = TimeSpan.FromSeconds(host.ShutdownTimeoutSeconds));
 

@@ -95,3 +95,52 @@ public class PipeValidatorTests
         Assert.Contains("Destination.Url", ex.Message);
     }
 }
+
+public class EventHubsValidationTests
+{
+    private static PipeConfig Pipe(Action<PipeConfig> tweak)
+    {
+        var p = new PipeConfig
+        {
+            Name = "eh",
+            Source = new() { Transport = "eventhubs", ConnectionString = "Endpoint=sb://x", EventHub = "h", ConsumerGroup = "$Default", CheckpointConnectionString = "UseDevelopmentStorage=true" },
+            Destination = new() { Transport = "eventhubs", Namespace = "ns.servicebus.windows.net", EventHub = "out" },
+        };
+        tweak(p);
+        return p;
+    }
+
+    [Fact]
+    public void A_complete_eventhubs_pipe_is_valid() => Assert.Empty(PipeValidator.Validate([Pipe(_ => { })], new()));
+
+    [Fact]
+    public void Source_needs_exactly_one_credential_a_hub_and_a_checkpoint_store()
+    {
+        var errors = PipeValidator.Validate([Pipe(p =>
+        {
+            p.Source.Namespace = "ns"; // both connection string and namespace
+            p.Source.EventHub = "";
+            p.Source.CheckpointConnectionString = "";
+        })]);
+        Assert.Contains(errors, e => e.Contains("Source.EventHub"));
+        Assert.Contains(errors, e => e.Contains("Source needs exactly one of ConnectionString or Namespace"));
+        Assert.Contains(errors, e => e.Contains("Checkpoint"));
+    }
+
+    [Fact]
+    public void Destination_needs_a_hub_and_exactly_one_credential()
+    {
+        var errors = PipeValidator.Validate([Pipe(p => { p.Destination.EventHub = ""; p.Destination.Namespace = ""; })]);
+        Assert.Contains(errors, e => e.Contains("Destination.EventHub"));
+        Assert.Contains(errors, e => e.Contains("Destination needs exactly one"));
+    }
+
+    [Fact]
+    public void Redis_destination_needs_a_stream_and_a_connection_string()
+    {
+        var p = Pipe(p => p.Destination = new() { Transport = "redis" });
+        var errors = PipeValidator.Validate([p], new());
+        Assert.Contains(errors, e => e.Contains("Destination.Stream"));
+        Assert.Contains(errors, e => e.Contains("Host:RedisConnectionString"));
+    }
+}
