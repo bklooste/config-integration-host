@@ -92,7 +92,7 @@ public class RuleEngineMapTests(RuleEngineFixture rules) : IClassFixture<RuleEng
         var stream = Unique("s");
         await using var receiver = await Receiver.StartAsync();
         var db = await Db();
-        var id = (string)(await db.StreamAddAsync(stream, [new("data", """{"eventType":"order","orderId":"o1","amount":"12.5","customerEmail":"secret@x.com"}""")]))!;
+        var id = (string)(await db.StreamAddAsync(stream, [new("data", """{"eventType":"order","orderId":"o1","amount":"12.5","internalNote":"private-value"}""")]))!;
 
         await using var host = Host(receiver, stream, template);
         using var client = host.CreateClient();
@@ -101,7 +101,7 @@ public class RuleEngineMapTests(RuleEngineFixture rules) : IClassFixture<RuleEng
         var call = receiver.Calls.Single();
         Assert.Contains("\"orderId\":\"o1\"", call.Body);
         Assert.Contains("\"kind\":\"fulfilment\"", call.Body);
-        Assert.DoesNotContain("secret@x.com", call.Body);   // the internal field never leaves
+        Assert.DoesNotContain("private-value", call.Body);   // the internal field never leaves
         Assert.Equal(id, call.Headers["Idempotency-Key"]);   // dedupe key unchanged by mapping
     }
 
