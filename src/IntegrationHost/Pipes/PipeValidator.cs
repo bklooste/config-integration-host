@@ -67,8 +67,11 @@ public static class PipeValidator
                 case "eventhubs":
                     ValidateEventHubs("Destination", d.ConnectionString, d.Namespace, d.EventHub, Err);
                     break;
+                case "objectstore":
+                    ValidateObjectStore(d, Err);
+                    break;
                 default:
-                    Err($"Destination.Transport '{d.Transport}' is not supported (supported: http, redis, eventhubs).");
+                    Err($"Destination.Transport '{d.Transport}' is not supported (supported: http, redis, eventhubs, objectstore).");
                     break;
             }
 
@@ -83,6 +86,21 @@ public static class PipeValidator
         }
 
         return errors;
+    }
+
+    private static readonly HashSet<string> NameTokens = new(StringComparer.Ordinal) { "id", "type", "correlationId", "partitionKey", "date" };
+
+    private static void ValidateObjectStore(DestinationConfig d, Action<string> err)
+    {
+        var backend = d.Backend.ToLowerInvariant();
+        if (backend is not ("azure-blob" or "file")) err($"Destination.Backend '{d.Backend}' must be azure-blob or file.");
+        if (string.IsNullOrWhiteSpace(d.Container)) err("Destination.Container is required for an objectstore destination.");
+        if (backend == "azure-blob" && string.IsNullOrWhiteSpace(d.ConnectionString) == string.IsNullOrWhiteSpace(d.ServiceUri))
+            err("Destination (azure-blob) needs exactly one of ConnectionString or ServiceUri.");
+        var tokens = System.Text.RegularExpressions.Regex.Matches(d.NameTemplate, @"\{([^{}]*)\}").Select(m => m.Groups[1].Value).ToList();
+        foreach (var t in tokens.Where(t => !NameTokens.Contains(t)).Distinct())
+            err($"Destination.NameTemplate has unknown token '{{{t}}}' (allowed: {string.Join(", ", NameTokens.Select(n => "{" + n + "}"))}).");
+        if (!tokens.Contains("id")) err("Destination.NameTemplate must contain {id}, or distinct messages would overwrite/skip each other.");
     }
 
     private static void ValidateEventHubs(string side, string connectionString, string ns, string hub, Action<string> err)

@@ -4,7 +4,7 @@
 [![Image](https://img.shields.io/badge/ghcr.io-config--integration--host-blue)](https://github.com/bklooste/config-integration-host/pkgs/container/config-integration-host%2Fservice)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-Config-defined integration pipes: move messages between Redis streams, Azure Event Hubs and HTTP endpoints with at-least-once delivery, a dedupe key on every message, retry with backoff, and a failure policy you choose per pipe. Add, change or remove a pipe by editing config — no code, no new service. (Early version: `redis` and `eventhubs` sources, `http`, `redis` and `eventhubs` destinations, passthrough map. See [Roadmap](#roadmap).)
+Config-defined integration pipes: move messages between Redis streams, Azure Event Hubs and HTTP endpoints with at-least-once delivery, a dedupe key on every message, retry with backoff, and a failure policy you choose per pipe. Add, change or remove a pipe by editing config — no code, no new service. (Early version: `redis` and `eventhubs` sources, `http`, `redis`, `eventhubs` and `objectstore` (Azure Blob / file) destinations, passthrough map. See [Roadmap](#roadmap).)
 
 ## Quick start
 
@@ -70,11 +70,17 @@ Redis stream entries: the payload is taken from the `data` field (`Source.Payloa
 |---|---|---|---|
 | `redis` | Consumer group; ack after delivery; pending + dead-replica recovery | `XADD` (payload in `data`, plus `type`, `source-id`, propagated headers) | Stream id (`1712345678901-0`); destination stores it as `source-id` |
 | `eventhubs` | `EventProcessorClient` with blob checkpoints; one in-flight event per partition, checkpointed only after delivery | One event per message; `MessageId` + `idempotency-key` property | `hub/partition/sequenceNumber` |
+| `objectstore` | — | One object per message, named from a template; **never overwrites**, so a redelivery is a no-op. Backends: `azure-blob`, `file` | Embedded in the object name via `{id}` |
 | `http` | — | One request per message; non-2xx = failure | `Idempotency-Key` header |
 
 Any source can feed any destination. Event Hubs has no idempotent producer, so an `eventhubs` destination can
 duplicate on retry — its consumers must dedupe on `idempotency-key`. An `eventhubs` source checkpoints after **every**
 delivered event (one blob write each), which favours correctness over throughput.
+
+An `objectstore` name template must contain `{id}`; tokens are `{id}`, `{type}`, `{correlationId}`, `{partitionKey}` and
+`{date}`. `correlationId` / `partitionKey` come from stream fields of the same name. The object body is the payload bytes
+exactly as received. With the `file` backend, `/` in a name creates subdirectories and message data can never resolve
+outside the root.
 
 ### Pipe reference
 
@@ -100,6 +106,11 @@ delivered event (one blob write each), which favours correctness over throughput
 | `Destination.Headers` | _(empty)_ | [http] Extra request headers. Supply secrets with `..._FILE` env vars. |
 | `Destination.TimeoutSeconds` | `30` | [http] Per-request timeout. |
 | `Destination.Stream` / `MaxLength` | _(required for redis)_ / `0` | [redis] Stream to append to; approximate max length (0 = unbounded). |
+| `Destination.Backend` | _(required for objectstore)_ | `azure-blob` or `file`. |
+| `Destination.Container` | _(required for objectstore)_ | Blob container name (created if missing) or, for `file`, the root directory. |
+| `Destination.ConnectionString` / `ServiceUri` | — | [objectstore azure-blob] Exactly one: connection string, or account URI (`DefaultAzureCredential`). |
+| `Destination.NameTemplate` | `{type}-{correlationId}-{id}` | [objectstore] Object name; must contain `{id}`. |
+| `Destination.StripTypePrefix` | _(empty)_ | [objectstore] Removed from the start of `{type}` before naming. |
 | `Destination.ConnectionString` / `Namespace` / `EventHub` / `PartitionKey` | — | [eventhubs] As for the source; `PartitionKey` (optional) keeps related events ordered. |
 | `OnFailure` | `block` | `block` or `skip-and-alert`. |
 | `Retry.MaxAttempts` / `InitialDelayMs` / `MaxDelayMs` | `5` / `200` / `30000` | Backoff doubles from initial up to max. |
@@ -161,7 +172,7 @@ version (`:1.4`), not `:latest`, in production.
 
 Not in this version — pipes using them are rejected at validation with a clear error rather than ignored:
 
-- Sources/destinations: Kafka, object store (Azure Blob / S3 / file).
+- Sources/destinations: Kafka; object-store backend `s3`.
 - Maps: templates (`rule-engine-service` v2), compiled code handlers.
 - Per-pipe lag metric.
 

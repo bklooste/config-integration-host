@@ -19,6 +19,9 @@ public sealed class PipeFactory(IServiceProvider services, IntegrationHostOption
         "redis" => new RedisDestination(services.GetRequiredService<IConnectionMultiplexer>(), pipe.Destination),
         "eventhubs" => new EventHubsDestination(
             EventHubsClients.Producer(pipe.Destination.ConnectionString, pipe.Destination.Namespace, pipe.Destination.EventHub), pipe.Destination),
+        "objectstore" => new ObjectStoreDestination(
+            pipe.Destination.Backend.Equals("file", StringComparison.OrdinalIgnoreCase) ? new FileStore(pipe.Destination.Container) : new AzureBlobStore(pipe.Destination),
+            pipe.Destination),
         var t => throw new InvalidOperationException($"Unknown destination transport '{t}'"),
     };
 }

@@ -11,7 +11,7 @@ namespace IntegrationHost.Runtime;
 /// </summary>
 public sealed class RedisStreamSource(IConnectionMultiplexer redis, SourceConfig config, string consumer) : IMessageSource
 {
-    private static readonly string[] PassThroughHeaders = ["traceparent", "correlationId", "correlation_id"];
+    private static readonly string[] PassThroughHeaders = ["traceparent", "correlationId", "correlation_id", "partitionKey", "partition_key"];
 
     private IDatabase Db => redis.GetDatabase();
     private bool ownPendingDrained;

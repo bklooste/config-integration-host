@@ -54,7 +54,7 @@ public sealed class EventHubsSource(SourceConfig config, ILogger logger) : IMess
         var id = $"{config.EventHub}/{args.Partition.PartitionId}/{e.SequenceNumber}";
 
         var headers = new Dictionary<string, string>();
-        foreach (var h in new[] { "traceparent", "correlationId", "correlation_id" })
+        foreach (var h in new[] { "traceparent", "correlationId", "correlation_id", "partitionKey", "partition_key" })
             if (e.Properties.TryGetValue(h, out var v) && v is not null) headers[h] = v.ToString()!;
         var type = e.Properties.TryGetValue("type", out var t) ? t?.ToString() : null;
 

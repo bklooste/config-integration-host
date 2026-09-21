@@ -9,5 +9,6 @@ actually changed.
 - Pipe model: `redis` source (consumer groups, pending recovery, dead-replica claim) → optional type filter →
   passthrough → `http` destination. At-least-once with `Idempotency-Key`, `traceparent` propagation.
 - `eventhubs` source (processor + blob checkpoints, checkpoint after delivery) and destination; `redis` destination.
+- `objectstore` destination (`azure-blob`, `file`): templated names, create-only writes so redelivery is idempotent.
 - Failure policies `block` and `skip-and-alert`, exponential-backoff retry.
 - Startup validation and `--validate` dry run; per-pipe health (`/health`, `/health/live`) and OTLP metrics.

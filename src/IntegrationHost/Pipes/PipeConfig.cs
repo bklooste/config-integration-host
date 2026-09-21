@@ -95,7 +95,7 @@ public sealed class MapConfig
 
 public sealed class DestinationConfig
 {
-    /// <summary><c>http</c>, <c>redis</c> or <c>eventhubs</c>. (<c>kafka</c> and <c>objectstore</c> are planned.)</summary>
+    /// <summary><c>http</c>, <c>redis</c>, <c>eventhubs</c> or <c>objectstore</c>. (<c>kafka</c> is planned.)</summary>
     public string Transport { get; set; } = "";
 
     /// <summary>[http] Absolute http(s) URL the payload is sent to.</summary>
@@ -115,6 +115,21 @@ public sealed class DestinationConfig
 
     /// <summary>[eventhubs] Event hub name.</summary>
     public string EventHub { get; set; } = "";
+
+    /// <summary>[objectstore] <c>azure-blob</c> or <c>file</c>.</summary>
+    public string Backend { get; set; } = "";
+
+    /// <summary>[objectstore] Blob container name (azure-blob; created if missing) or root directory (file).</summary>
+    public string Container { get; set; } = "";
+
+    /// <summary>[objectstore azure-blob] Storage account URI, accessed with DefaultAzureCredential. Use this or <see cref="ConnectionString"/>.</summary>
+    public string ServiceUri { get; set; } = "";
+
+    /// <summary>[objectstore] Object name template. Tokens: <c>{id}</c> (required), <c>{type}</c>, <c>{correlationId}</c>, <c>{partitionKey}</c>, <c>{date}</c> (yyyy/MM/dd, UTC).</summary>
+    public string NameTemplate { get; set; } = "{type}-{correlationId}-{id}";
+
+    /// <summary>[objectstore] Removed from the start of <c>{type}</c> before naming (e.g. a namespace prefix). Empty = keep.</summary>
+    public string StripTypePrefix { get; set; } = "";
 
     /// <summary>[eventhubs] Partition key for ordering; omitted = service-chosen partition.</summary>
     public string PartitionKey { get; set; } = "";
