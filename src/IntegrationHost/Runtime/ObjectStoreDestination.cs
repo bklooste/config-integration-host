@@ -62,6 +62,16 @@ public sealed class AzureBlobStore(DestinationConfig config) : IObjectStore
             BlobContainerClient c;
             if (string.IsNullOrWhiteSpace(config.ServiceUri))
                 c = new BlobContainerClient(config.ConnectionString, config.Container);
+            else if (!string.IsNullOrWhiteSpace(config.ConnectionString))
+            {
+                // Endpoint from ServiceUri, shared-key credentials taken from the connection string (any storage connection
+                // string of the same account will do, e.g. one written for tables).
+                var parts = config.ConnectionString.Split(';').Select(p => p.Split('=', 2)).Where(p => p.Length == 2)
+                    .ToDictionary(p => p[0], p => p[1], StringComparer.OrdinalIgnoreCase);
+                if (!parts.TryGetValue("AccountName", out var name) || !parts.TryGetValue("AccountKey", out var key))
+                    throw new InvalidOperationException("Destination.ConnectionString has no AccountName/AccountKey to authenticate ServiceUri with.");
+                c = new BlobServiceClient(new Uri(config.ServiceUri), new StorageSharedKeyCredential(name, key)).GetBlobContainerClient(config.Container);
+            }
             else if (!string.IsNullOrWhiteSpace(config.AccountKey))
                 c = new BlobServiceClient(new Uri(config.ServiceUri), new StorageSharedKeyCredential(config.AccountName, config.AccountKey)).GetBlobContainerClient(config.Container);
             else

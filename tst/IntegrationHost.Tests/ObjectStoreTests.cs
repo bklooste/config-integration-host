@@ -151,7 +151,8 @@ public class ObjectStoreTests(AzuriteFixture azurite, RedisFixture redis) : ICla
         Assert.Empty(PipeValidator.Validate([P(_ => { })], new() { RedisConnectionString = "x" }));
         Assert.Contains(PipeValidator.Validate([P(d => d.Backend = "s3")]), e => e.Contains("Backend"));
         Assert.Contains(PipeValidator.Validate([P(d => d.Container = "")]), e => e.Contains("Container"));
-        Assert.Contains(PipeValidator.Validate([P(d => d.ServiceUri = "https://a")]), e => e.Contains("exactly one"));
+        Assert.Empty(PipeValidator.Validate([P(d => d.ServiceUri = "https://a")])); // uri + connection string = endpoint + shared-key credentials
+        Assert.Contains(PipeValidator.Validate([P(d => { d.ConnectionString = ""; })]), e => e.Contains("needs ConnectionString, or ServiceUri"));
         Assert.Contains(PipeValidator.Validate([P(d => d.NameTemplate = "{type}")]), e => e.Contains("{id}"));
         Assert.Contains(PipeValidator.Validate([P(d => d.NameTemplate = "{id}{bogus}")]), e => e.Contains("{bogus}"));
     }
@@ -245,6 +246,23 @@ public class ObjectStoreSharedKeyTests(AzuriteFixture azurite) : IClassFixture<A
         await new ObjectStoreDestination(new AzureBlobStore(cfg), cfg).SendAsync(new Envelope("1-0", "x", null, new Dictionary<string, string>()), default);
 
         Assert.True(await new BlobContainerClient(azurite.ConnectionString, container).GetBlobClient("1-0").ExistsAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Service_uri_with_a_connection_string_takes_credentials_from_the_connection_string()
+    {
+        var container = "cs-" + Guid.NewGuid().ToString("N")[..8];
+        var conn = azurite.ConnectionString.Split(';').Select(p => p.Split('=', 2)).Where(p => p.Length == 2).ToDictionary(p => p[0], p => p[1]);
+        // A table-style connection string for the same account (no BlobEndpoint): only its AccountName/AccountKey matter.
+        var cfg = new DestinationConfig
+        {
+            Transport = "objectstore", Backend = "azure-blob", Container = container, NameTemplate = "{id}",
+            ServiceUri = conn["BlobEndpoint"], ConnectionString = $"DefaultEndpointsProtocol=http;AccountName={conn["AccountName"]};AccountKey={conn["AccountKey"]};TableEndpoint=http://unused/",
+        };
+
+        await new ObjectStoreDestination(new AzureBlobStore(cfg), cfg).SendAsync(new Envelope("2-0", "x", null, new Dictionary<string, string>()), default);
+
+        Assert.True(await new BlobContainerClient(azurite.ConnectionString, container).GetBlobClient("2-0").ExistsAsync(TestContext.Current.CancellationToken));
     }
 
     [Fact]

@@ -102,12 +102,14 @@ public static class PipeValidator
         var backend = d.Backend.ToLowerInvariant();
         if (backend is not ("azure-blob" or "file")) err($"Destination.Backend '{d.Backend}' must be azure-blob or file.");
         if (string.IsNullOrWhiteSpace(d.Container)) err("Destination.Container is required for an objectstore destination.");
-        if (backend == "azure-blob" && string.IsNullOrWhiteSpace(d.ConnectionString) == string.IsNullOrWhiteSpace(d.ServiceUri))
-            err("Destination (azure-blob) needs exactly one of ConnectionString or ServiceUri.");
+        var hasCs = !string.IsNullOrWhiteSpace(d.ConnectionString);
+        var hasUri = !string.IsNullOrWhiteSpace(d.ServiceUri);
+        if (backend == "azure-blob" && !hasCs && !hasUri) err("Destination (azure-blob) needs ConnectionString, or ServiceUri (optionally with ConnectionString or AccountName/AccountKey for credentials).");
+        if (hasCs && hasUri && !string.IsNullOrWhiteSpace(d.AccountKey)) err("Destination: give credentials as ConnectionString or AccountName/AccountKey, not both.");
         var hasName = !string.IsNullOrWhiteSpace(d.AccountName);
         var hasKey = !string.IsNullOrWhiteSpace(d.AccountKey);
         if (hasName != hasKey) err("Destination.AccountName and AccountKey must be set together.");
-        if (hasKey && string.IsNullOrWhiteSpace(d.ServiceUri)) err("Destination.AccountKey needs ServiceUri (shared-key access to that account).");
+        if (hasKey && !hasUri) err("Destination.AccountKey needs ServiceUri (shared-key access to that account).");
         var tokens = System.Text.RegularExpressions.Regex.Matches(d.NameTemplate, @"\{([^{}]*)\}").Select(m => m.Groups[1].Value).ToList();
         foreach (var t in tokens.Where(t => !NameTokens.Contains(t)).Distinct())
             err($"Destination.NameTemplate has unknown token '{{{t}}}' (allowed: {string.Join(", ", NameTokens.Select(n => "{" + n + "}"))}).");

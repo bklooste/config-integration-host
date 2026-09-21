@@ -132,7 +132,7 @@ to strip internal fields before data leaves.
 | `Destination.Stream` / `MaxLength` | _(required for redis)_ / `0` | [redis] Stream to append to; approximate max length (0 = unbounded). |
 | `Destination.Backend` | _(required for objectstore)_ | `azure-blob` or `file`. |
 | `Destination.Container` | _(required for objectstore)_ | Blob container name (created if missing) or, for `file`, the root directory. |
-| `Destination.ConnectionString` / `ServiceUri` | — | [objectstore azure-blob] Exactly one: connection string, or account URI. A URI alone uses `DefaultAzureCredential`. |
+| `Destination.ConnectionString` / `ServiceUri` | — | [objectstore azure-blob] A connection string; or an account URI (alone: `DefaultAzureCredential`; **with** a connection string: that URI is the endpoint and the connection string's `AccountName`/`AccountKey` are the credentials). |
 | `Destination.AccountName` / `AccountKey` | — | [objectstore azure-blob] With `ServiceUri`: shared-key access (Azurite, or an account key supplied via `..._FILE`). Set together. |
 | `Destination.NameTemplate` | `{type}-{correlationId}-{id}` | [objectstore] Object name; must contain `{id}` (the dedupe id — for a multi-partition redis source it is `<partition>-<entryId>`) or `{entryId}` (the source's own id, unqualified). |
 | `Destination.StripTypePrefix` | _(empty)_ | [objectstore] Removed from the start of `{type}` before naming. |
