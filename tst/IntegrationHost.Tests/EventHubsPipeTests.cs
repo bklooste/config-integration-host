@@ -112,8 +112,14 @@ public class EventHubsPipeTests(EventHubsFixture eh, RedisFixture redis)
         ]).ToArray());
         using var client = host.CreateClient();
 
-        Assert.True(await Receiver.WaitFor(() => mux.GetDatabase().StreamLength(stream) >= 1, Timeout));
-        var entry = (await mux.GetDatabase().StreamRangeAsync(stream)).First();
+        // The hub is shared with other tests, so the consumer group may also see their events: look for ours.
+        StreamEntry? found = null;
+        Assert.True(await Receiver.WaitFor(() =>
+        {
+            found = mux.GetDatabase().StreamRange(stream).Cast<StreamEntry?>().FirstOrDefault(e => ((string?)e!.Value["data"])?.Contains(marker) == true);
+            return found is not null;
+        }, Timeout));
+        var entry = found!.Value;
         Assert.Contains(marker, (string)entry["data"]!);
         Assert.Equal("OrderPlaced", (string)entry["type"]!);
         Assert.StartsWith("eh1/", (string)entry["source-id"]!);
