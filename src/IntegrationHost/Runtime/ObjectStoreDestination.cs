@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Azure;
 using Azure.Identity;
+using Azure.Storage;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
 using IntegrationHost.Pipes;
@@ -58,9 +59,13 @@ public sealed class AzureBlobStore(DestinationConfig config) : IObjectStore
         try
         {
             if (container is not null) return container;
-            var c = string.IsNullOrWhiteSpace(config.ServiceUri)
-                ? new BlobContainerClient(config.ConnectionString, config.Container)
-                : new BlobServiceClient(new Uri(config.ServiceUri), new DefaultAzureCredential()).GetBlobContainerClient(config.Container);
+            BlobContainerClient c;
+            if (string.IsNullOrWhiteSpace(config.ServiceUri))
+                c = new BlobContainerClient(config.ConnectionString, config.Container);
+            else if (!string.IsNullOrWhiteSpace(config.AccountKey))
+                c = new BlobServiceClient(new Uri(config.ServiceUri), new StorageSharedKeyCredential(config.AccountName, config.AccountKey)).GetBlobContainerClient(config.Container);
+            else
+                c = new BlobServiceClient(new Uri(config.ServiceUri), new DefaultAzureCredential()).GetBlobContainerClient(config.Container);
             await c.CreateIfNotExistsAsync(cancellationToken: ct);
             return container = c;
         }

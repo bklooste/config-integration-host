@@ -144,6 +144,12 @@ public sealed class DestinationConfig
     /// <summary>[objectstore azure-blob] Storage account URI, accessed with DefaultAzureCredential. Use this or <see cref="ConnectionString"/>.</summary>
     public string ServiceUri { get; set; } = "";
 
+    /// <summary>[objectstore azure-blob] Storage account name, used with <see cref="AccountKey"/> and <see cref="ServiceUri"/> for shared-key access (e.g. Azurite, or an account key).</summary>
+    public string AccountName { get; set; } = "";
+
+    /// <summary>[objectstore azure-blob] Storage account key. Supply with <c>..._FILE</c>. Needs <see cref="ServiceUri"/> and <see cref="AccountName"/>.</summary>
+    public string AccountKey { get; set; } = "";
+
     /// <summary>[objectstore] Object name template. Tokens: <c>{id}</c> or <c>{entryId}</c> (one required), <c>{type}</c>, <c>{correlationId}</c>, <c>{partitionKey}</c>, <c>{date}</c> (yyyy/MM/dd, UTC).</summary>
     public string NameTemplate { get; set; } = "{type}-{correlationId}-{id}";
 

@@ -227,3 +227,36 @@ public class ObjectStoreTests(AzuriteFixture azurite, RedisFixture redis) : ICla
         Assert.Equal(before, containerClient.GetBlobs().ToDictionary(b => b.Name, b => b.Properties.ETag));
     }
 }
+
+public class ObjectStoreSharedKeyTests(AzuriteFixture azurite) : IClassFixture<AzuriteFixture>
+{
+    [Fact]
+    public async Task Service_uri_with_account_name_and_key_writes_to_the_account()
+    {
+        var container = "sk-" + Guid.NewGuid().ToString("N")[..8];
+        var conn = azurite.ConnectionString.Split(';').Select(p => p.Split('=', 2)).Where(p => p.Length == 2).ToDictionary(p => p[0], p => p[1]);
+        var cfg = new DestinationConfig
+        {
+            Transport = "objectstore", Backend = "azure-blob", Container = container, NameTemplate = "{id}",
+            ServiceUri = conn["BlobEndpoint"], AccountName = conn["AccountName"], AccountKey = conn["AccountKey"],
+        };
+        Assert.Empty(PipeValidator.Validate([new PipeConfig { Name = "p", Source = new() { Transport = "redis", Stream = "s", ConsumerGroup = "g" }, Destination = cfg }]));
+
+        await new ObjectStoreDestination(new AzureBlobStore(cfg), cfg).SendAsync(new Envelope("1-0", "x", null, new Dictionary<string, string>()), default);
+
+        Assert.True(await new BlobContainerClient(azurite.ConnectionString, container).GetBlobClient("1-0").ExistsAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public void Account_key_needs_a_name_and_a_service_uri()
+    {
+        PipeConfig P(Action<DestinationConfig> t)
+        {
+            var d = new DestinationConfig { Transport = "objectstore", Backend = "azure-blob", Container = "c", ServiceUri = "https://a.blob.core.windows.net", NameTemplate = "{id}" };
+            t(d);
+            return new() { Name = "p", Source = new() { Transport = "redis", Stream = "s", ConsumerGroup = "g" }, Destination = d };
+        }
+        Assert.Contains(PipeValidator.Validate([P(d => d.AccountKey = "k")]), e => e.Contains("together"));
+        Assert.Contains(PipeValidator.Validate([P(d => { d.ServiceUri = ""; d.ConnectionString = "x"; d.AccountName = "a"; d.AccountKey = "k"; })]), e => e.Contains("needs ServiceUri"));
+    }
+}
