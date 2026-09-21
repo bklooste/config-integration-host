@@ -34,6 +34,13 @@ public sealed class PipeConfig
         }
     }
     public RetryConfig Retry { get; set; } = new();
+
+    /// <summary>
+    /// Messages of one batch delivered in parallel. <c>1</c> (default) keeps strict read order. Above 1, order is not preserved
+    /// and a message that is blocked retrying does not hold up the others in its batch — use for destinations where order
+    /// does not matter (e.g. an object store), and never with a partner that needs ordered delivery.
+    /// </summary>
+    public int Concurrency { get; set; } = 1;
 }
 
 public sealed class SourceConfig

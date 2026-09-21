@@ -51,7 +51,7 @@ replicas (give each a distinct `Host__ConsumerName`).
   header. Receivers **must** dedupe on it — redelivery is normal, not exceptional.
 - **Trace propagation.** If the stream entry has a `traceparent` field, the outgoing request continues that trace.
   A `correlationId` / `correlation_id` field is forwarded as `X-Correlation-Id`.
-- **Order.** Messages of one pipe are delivered one at a time, in read order. With `block`, a failing message holds up
+- **Order.** By default messages of one pipe are delivered one at a time, in read order (see `Concurrency` to trade this for throughput). With `block`, a failing message holds up
   everything behind it — that is the point.
 - **Failure.** A non-2xx response or a network error is a failure, never swallowed. Retried with exponential backoff
   (`Retry`), then `OnFailure` applies:
@@ -138,6 +138,7 @@ to strip internal fields before data leaves.
 | `Destination.StripTypePrefix` | _(empty)_ | [objectstore] Removed from the start of `{type}` before naming. |
 | `Destination.ConnectionString` / `Namespace` / `EventHub` / `PartitionKey` | — | [eventhubs] As for the source; `PartitionKey` (optional) keeps related events ordered. |
 | `OnFailure` | `block` | `block` or `skip-and-alert`. |
+| `Concurrency` | `1` | Messages of a batch delivered in parallel (1–64). `1` keeps strict read order; above 1 order is not preserved and a blocked message does not hold up the rest of its batch. For order-insensitive destinations such as an object store. |
 | `Retry.MaxAttempts` / `InitialDelayMs` / `MaxDelayMs` | `5` / `200` / `30000` | Backoff doubles from initial up to max. |
 
 ### Validate before you deploy

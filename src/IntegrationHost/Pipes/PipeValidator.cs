@@ -87,6 +87,8 @@ public static class PipeValidator
                 && (s.Transport.Equals("redis", StringComparison.OrdinalIgnoreCase) || d.Transport.Equals("redis", StringComparison.OrdinalIgnoreCase)))
                 Err("uses redis but Host:RedisConnectionString is not set.");
 
+            if (p.Concurrency is < 1 or > 64) Err("Concurrency must be 1-64.");
+
             var r = p.Retry;
             if (r.MaxAttempts < 1) Err("Retry.MaxAttempts must be at least 1.");
             if (r.InitialDelayMs < 0 || r.MaxDelayMs < r.InitialDelayMs) Err("Retry delays must satisfy 0 <= InitialDelayMs <= MaxDelayMs.");

@@ -166,4 +166,42 @@ public class PipeRunnerTests
         public Task<IReadOnlyList<Envelope>> ReadAsync(CancellationToken ct) => Task.FromResult(read());
         public Task AckAsync(Envelope m, CancellationToken ct) => Task.CompletedTask;
     }
+
+    [Fact]
+    public async Task Concurrency_delivers_a_batch_in_parallel_and_acks_every_message()
+    {
+        var running = 0; var peak = 0;
+        var source = new BatchSource([.. Enumerable.Range(1, 12).Select(i => Msg(i.ToString()))]);
+        var dest = new SlowDestination(async () =>
+        {
+            var now = Interlocked.Increment(ref running);
+            int seen; while (now > (seen = Volatile.Read(ref peak))) Interlocked.CompareExchange(ref peak, now, seen);
+            await Task.Delay(50);
+            Interlocked.Decrement(ref running);
+        });
+        var pipe = Pipe(FailurePolicy.Block);
+        pipe.Concurrency = 4;
+        var (runner, _) = Runner(pipe, source, dest);
+
+        await runner.StartAsync(default);
+        Assert.True(await Receiver.WaitFor(() => source.Acked.Count == 12, TimeSpan.FromSeconds(10)));
+        await runner.StopAsync(default);
+
+        Assert.InRange(peak, 2, 4); // parallel, and never above the cap
+    }
+
+    private sealed class BatchSource(Envelope[] all) : IMessageSource
+    {
+        private int given;
+        public System.Collections.Concurrent.ConcurrentBag<string> Acked { get; } = [];
+        public Task StartAsync(CancellationToken ct) => Task.CompletedTask;
+        public Task<IReadOnlyList<Envelope>> ReadAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<Envelope>>(Interlocked.Exchange(ref given, 1) == 0 ? all : []);
+        public Task AckAsync(Envelope m, CancellationToken ct) { Acked.Add(m.Id); return Task.CompletedTask; }
+    }
+
+    private sealed class SlowDestination(Func<Task> work) : IDestination
+    {
+        public async Task SendAsync(Envelope m, CancellationToken ct) => await work();
+    }
 }
