@@ -34,6 +34,13 @@ public sealed class PipeConfig
         }
     }
     public RetryConfig Retry { get; set; } = new();
+
+    /// <summary>
+    /// Messages of one batch delivered in parallel. <c>1</c> (default) keeps strict read order. Above 1, order is not preserved
+    /// and a message that is blocked retrying does not hold up the others in its batch — use for destinations where order
+    /// does not matter (e.g. an object store), and never with a partner that needs ordered delivery.
+    /// </summary>
+    public int Concurrency { get; set; } = 1;
 }
 
 public sealed class SourceConfig
@@ -43,6 +50,16 @@ public sealed class SourceConfig
 
     /// <summary>[redis] Stream key to read, exactly as stored (include any environment prefix).</summary>
     public string Stream { get; set; } = "";
+
+    /// <summary>[redis] Number of partitioned streams. With more than one, <see cref="Stream"/> must contain <c>{partition}</c>, replaced by 0..N-1.</summary>
+    public int Partitions { get; set; } = 1;
+
+    /// <summary>
+    /// [redis] Extra stream-field → header-name mappings, added to the defaults (<c>traceparent</c>, <c>correlationId</c>,
+    /// <c>correlation_id</c>, <c>partitionKey</c>, <c>partition_key</c> map to themselves). Headers feed <c>{correlationId}</c>
+    /// / <c>{partitionKey}</c> in object names, trace propagation and outgoing properties. Example: <c>{"c":"correlationId","k":"partitionKey","p":"traceparent"}</c>.
+    /// </summary>
+    public Dictionary<string, string> HeaderFields { get; set; } = new();
 
     /// <summary>[eventhubs] Connection string. Use this or <see cref="Namespace"/> (managed identity / DefaultAzureCredential).</summary>
     public string ConnectionString { get; set; } = "";
@@ -134,7 +151,13 @@ public sealed class DestinationConfig
     /// <summary>[objectstore azure-blob] Storage account URI, accessed with DefaultAzureCredential. Use this or <see cref="ConnectionString"/>.</summary>
     public string ServiceUri { get; set; } = "";
 
-    /// <summary>[objectstore] Object name template. Tokens: <c>{id}</c> (required), <c>{type}</c>, <c>{correlationId}</c>, <c>{partitionKey}</c>, <c>{date}</c> (yyyy/MM/dd, UTC).</summary>
+    /// <summary>[objectstore azure-blob] Storage account name, used with <see cref="AccountKey"/> and <see cref="ServiceUri"/> for shared-key access (e.g. Azurite, or an account key).</summary>
+    public string AccountName { get; set; } = "";
+
+    /// <summary>[objectstore azure-blob] Storage account key. Supply with <c>..._FILE</c>. Needs <see cref="ServiceUri"/> and <see cref="AccountName"/>.</summary>
+    public string AccountKey { get; set; } = "";
+
+    /// <summary>[objectstore] Object name template. Tokens: <c>{id}</c> or <c>{entryId}</c> (one required), <c>{type}</c>, <c>{correlationId}</c>, <c>{partitionKey}</c>, <c>{date}</c> (yyyy/MM/dd, UTC).</summary>
     public string NameTemplate { get; set; } = "{type}-{correlationId}-{id}";
 
     /// <summary>[objectstore] Removed from the start of <c>{type}</c> before naming (e.g. a namespace prefix). Empty = keep.</summary>

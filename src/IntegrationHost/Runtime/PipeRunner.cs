@@ -24,7 +24,11 @@ public sealed class PipeRunner(
                 if (!started) { if (map is not null) await map.CheckAsync(ct); await source.StartAsync(ct); started = true; state.Running(); }
                 var batch = await source.ReadAsync(ct);
                 if (batch.Count == 0) { state.Running(); await Task.Delay(pollInterval, ct); continue; }
-                foreach (var message in batch) await ProcessAsync(message, ct);
+                if (pipe.Concurrency <= 1)
+                    foreach (var message in batch) await ProcessAsync(message, ct);
+                else
+                    await Parallel.ForEachAsync(batch, new ParallelOptions { MaxDegreeOfParallelism = pipe.Concurrency, CancellationToken = ct },
+                        async (message, token) => await ProcessAsync(message, token));
                 loopBackoff = TimeSpan.FromSeconds(1);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
@@ -82,7 +86,7 @@ public sealed class PipeRunner(
                         return true;
                     }
                     metrics.Mapped();
-                    outgoing = message with { Payload = mapped };
+                    outgoing = message with { Payload = mapped, RawBody = null };
                 }
                 await destination.SendAsync(outgoing, ct);
                 metrics.Sent();

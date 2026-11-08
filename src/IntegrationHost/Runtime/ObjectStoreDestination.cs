@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Azure;
 using Azure.Identity;
+using Azure.Storage;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
 using IntegrationHost.Pipes;
@@ -22,7 +23,7 @@ public interface IObjectStore
 public sealed partial class ObjectStoreDestination(IObjectStore store, DestinationConfig config) : IDestination
 {
     public async Task SendAsync(Envelope message, CancellationToken ct) =>
-        await store.PutIfAbsentAsync(Name(message), Encoding.UTF8.GetBytes(message.Payload), ct);
+        await store.PutIfAbsentAsync(Name(message), message.Body, ct);
 
     internal string Name(Envelope m)
     {
@@ -32,6 +33,7 @@ public sealed partial class ObjectStoreDestination(IObjectStore store, Destinati
         return Token().Replace(config.NameTemplate, t => t.Groups[1].Value switch
         {
             "id" => m.Id,
+            "entryId" => m.EntryId ?? m.Id,
             "type" => type,
             "correlationId" => m.Headers.GetValueOrDefault("correlationId") ?? m.Headers.GetValueOrDefault("correlation_id") ?? "",
             "partitionKey" => m.Headers.GetValueOrDefault("partitionKey") ?? m.Headers.GetValueOrDefault("partition_key") ?? "",
@@ -57,9 +59,23 @@ public sealed class AzureBlobStore(DestinationConfig config) : IObjectStore
         try
         {
             if (container is not null) return container;
-            var c = string.IsNullOrWhiteSpace(config.ServiceUri)
-                ? new BlobContainerClient(config.ConnectionString, config.Container)
-                : new BlobServiceClient(new Uri(config.ServiceUri), new DefaultAzureCredential()).GetBlobContainerClient(config.Container);
+            BlobContainerClient c;
+            if (string.IsNullOrWhiteSpace(config.ServiceUri))
+                c = new BlobContainerClient(config.ConnectionString, config.Container);
+            else if (!string.IsNullOrWhiteSpace(config.ConnectionString))
+            {
+                // Endpoint from ServiceUri, shared-key credentials taken from the connection string (any storage connection
+                // string of the same account will do, e.g. one written for tables).
+                var parts = config.ConnectionString.Split(';').Select(p => p.Split('=', 2)).Where(p => p.Length == 2)
+                    .ToDictionary(p => p[0], p => p[1], StringComparer.OrdinalIgnoreCase);
+                if (!parts.TryGetValue("AccountName", out var name) || !parts.TryGetValue("AccountKey", out var key))
+                    throw new InvalidOperationException("Destination.ConnectionString has no AccountName/AccountKey to authenticate ServiceUri with.");
+                c = new BlobServiceClient(new Uri(config.ServiceUri), new StorageSharedKeyCredential(name, key)).GetBlobContainerClient(config.Container);
+            }
+            else if (!string.IsNullOrWhiteSpace(config.AccountKey))
+                c = new BlobServiceClient(new Uri(config.ServiceUri), new StorageSharedKeyCredential(config.AccountName, config.AccountKey)).GetBlobContainerClient(config.Container);
+            else
+                c = new BlobServiceClient(new Uri(config.ServiceUri), new DefaultAzureCredential()).GetBlobContainerClient(config.Container);
             await c.CreateIfNotExistsAsync(cancellationToken: ct);
             return container = c;
         }
