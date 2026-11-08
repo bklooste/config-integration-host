@@ -29,9 +29,9 @@ A **pipe** is `source → filter → map → destination`, plus a failure policy
   "Host": { "RedisConnectionString": "redis:6379" },
   "Pipes": [
     {
-      "Name": "audit-to-siem",
-      "Source":      { "Transport": "redis", "Stream": "audit", "ConsumerGroup": "int-audit-siem", "TypeFilter": ["AuditEntry"] },
-      "Destination": { "Transport": "http",  "Url": "https://siem.example/ingest", "Headers": { "Authorization": "Bearer ..." } },
+      "Name": "orders-to-partner",
+      "Source":      { "Transport": "redis", "Stream": "orders", "ConsumerGroup": "int-orders-partner", "TypeFilter": ["OrderPlaced"] },
+      "Destination": { "Transport": "http",  "Url": "https://partner.example/ingest", "Headers": { "Authorization": "Bearer ..." } },
       "OnFailure":   "block",
       "Retry":       { "MaxAttempts": 5, "InitialDelayMs": 200, "MaxDelayMs": 30000 }
     }
@@ -51,7 +51,7 @@ replicas (give each a distinct `Host__ConsumerName`).
   header. Receivers **must** dedupe on it — redelivery is normal, not exceptional.
 - **Trace propagation.** If the stream entry has a `traceparent` field, the outgoing request continues that trace.
   A `correlationId` / `correlation_id` field is forwarded as `X-Correlation-Id`.
-- **Order.** Messages of one pipe are delivered one at a time, in read order. With `block`, a failing message holds up
+- **Order.** By default messages of one pipe are delivered one at a time, in read order (see `Concurrency` to trade this for throughput). With `block`, a failing message holds up
   everything behind it — that is the point.
 - **Failure.** A non-2xx response or a network error is a failure, never swallowed. Retried with exponential backoff
   (`Retry`), then `OnFailure` applies:
@@ -77,9 +77,9 @@ Any source can feed any destination. Event Hubs has no idempotent producer, so a
 duplicate on retry — its consumers must dedupe on `idempotency-key`. An `eventhubs` source checkpoints after **every**
 delivered event (one blob write each), which favours correctness over throughput.
 
-An `objectstore` name template must contain `{id}`; tokens are `{id}`, `{type}`, `{correlationId}`, `{partitionKey}` and
-`{date}`. `correlationId` / `partitionKey` come from stream fields of the same name. The object body is the payload bytes
-exactly as received. With the `file` backend, `/` in a name creates subdirectories and message data can never resolve
+An `objectstore` name template must contain `{id}` or `{entryId}`; tokens are `{id}`, `{entryId}`, `{type}`, `{correlationId}`, `{partitionKey}` and
+`{date}`. `correlationId` / `partitionKey` come from stream fields of the same name. The object body is the message body
+byte for byte, even when it is not valid UTF-8 (a binary payload passes through untouched unless a template map rewrites it). With the `file` backend, `/` in a name creates subdirectories and message data can never resolve
 outside the root.
 
 ### Template maps
@@ -91,8 +91,8 @@ merged fragment. Anything not named in the template's `matchFragment` is dropped
 to strip internal fields before data leaves.
 
 ```jsonc
-"Map": { "Template": "ebets2warehousebets", "OnNoMatch": "skip" }
-// template rule:  { "dataToMatch": { "eventType": "bet" }, "matchFragment": { "betId": "{betId}", "stake": "{amount}" } }
+"Map": { "Template": "orders2fulfilment", "OnNoMatch": "skip" }
+// template rule:  { "dataToMatch": { "eventType": "order" }, "matchFragment": { "orderId": "{orderId}", "total": "{amount}" } }
 ```
 
 - The engine answers `{}` when nothing matched. The host never forwards that: it is `skip`ped (and counted) or, with
@@ -112,6 +112,8 @@ to strip internal fields before data leaves.
 | `Source.Transport` | _(required)_ | `redis` or `eventhubs`. |
 | `Source.Stream` | _(required for redis)_ | Stream key exactly as stored (include any prefix). |
 | `Source.ConsumerGroup` | _(required)_ | Consumer group for this pipe (for `eventhubs`: an event hub consumer group, e.g. `$Default`). |
+| `Source.Partitions` | `1` | [redis] Number of partitioned streams. With more than 1, `Source.Stream` must contain `{partition}` (replaced by `0`..`N-1`); all partitions are read by the one pipe. |
+| `Source.HeaderFields` | _(empty)_ | [redis] Extra stream-field → header-name mappings, e.g. `{"c":"correlationId","k":"partitionKey","p":"traceparent"}` for a producer that uses one-byte field names. `traceparent`, `correlationId`, `correlation_id`, `partitionKey`, `partition_key` are mapped by default. |
 | `Source.StartFrom` | `End` | [redis] Where a **new** group starts: `End` (only new messages) or `Beginning` (the whole stream). |
 | `Source.PayloadField` / `TypeField` | `data` / `type` | [redis] Stream fields holding payload and type. (`eventhubs`: body is the payload, `type` is an event property.) |
 | `Source.ConnectionString` / `Namespace` | — | [eventhubs] Exactly one: a connection string, or a fully-qualified namespace (uses `DefaultAzureCredential` / managed identity). |
@@ -130,11 +132,13 @@ to strip internal fields before data leaves.
 | `Destination.Stream` / `MaxLength` | _(required for redis)_ / `0` | [redis] Stream to append to; approximate max length (0 = unbounded). |
 | `Destination.Backend` | _(required for objectstore)_ | `azure-blob` or `file`. |
 | `Destination.Container` | _(required for objectstore)_ | Blob container name (created if missing) or, for `file`, the root directory. |
-| `Destination.ConnectionString` / `ServiceUri` | — | [objectstore azure-blob] Exactly one: connection string, or account URI (`DefaultAzureCredential`). |
-| `Destination.NameTemplate` | `{type}-{correlationId}-{id}` | [objectstore] Object name; must contain `{id}`. |
+| `Destination.ConnectionString` / `ServiceUri` | — | [objectstore azure-blob] A connection string; or an account URI (alone: `DefaultAzureCredential`; **with** a connection string: that URI is the endpoint and the connection string's `AccountName`/`AccountKey` are the credentials). |
+| `Destination.AccountName` / `AccountKey` | — | [objectstore azure-blob] With `ServiceUri`: shared-key access (Azurite, or an account key supplied via `..._FILE`). Set together. |
+| `Destination.NameTemplate` | `{type}-{correlationId}-{id}` | [objectstore] Object name; must contain `{id}` (the dedupe id — for a multi-partition redis source it is `<partition>-<entryId>`) or `{entryId}` (the source's own id, unqualified). |
 | `Destination.StripTypePrefix` | _(empty)_ | [objectstore] Removed from the start of `{type}` before naming. |
 | `Destination.ConnectionString` / `Namespace` / `EventHub` / `PartitionKey` | — | [eventhubs] As for the source; `PartitionKey` (optional) keeps related events ordered. |
 | `OnFailure` | `block` | `block` or `skip-and-alert`. |
+| `Concurrency` | `1` | Messages of a batch delivered in parallel (1–64). `1` keeps strict read order; above 1 order is not preserved and a blocked message does not hold up the rest of its batch. For order-insensitive destinations such as an object store. |
 | `Retry.MaxAttempts` / `InitialDelayMs` / `MaxDelayMs` | `5` / `200` / `30000` | Backoff doubles from initial up to max. |
 
 ### Validate before you deploy
@@ -166,7 +170,7 @@ Host settings come from environment variables (ASP.NET Core `Section__Key` form)
 
 **Secrets.** Any setting can be supplied from a file by adding `_FILE` to its env var, e.g.
 `Host__RedisConnectionString_FILE=/run/secrets/redis` or
-`Pipes__0__Destination__Headers__Authorization_FILE=/run/secrets/siem-token`. The host never logs its configuration.
+`Pipes__0__Destination__Headers__Authorization_FILE=/run/secrets/partner-token`. The host never logs its configuration.
 
 ## Metrics
 
@@ -215,3 +219,9 @@ Versions come from [Nerdbank.GitVersioning](https://github.com/dotnet/Nerdbank.G
 ## Licence
 
 [MIT](LICENSE). Third-party licences of the shipped image are listed in [NOTICE](NOTICE).
+
+## Migrating a sink without a gap
+
+Because `objectstore` writes are create-only and names are deterministic, cutting over from another sink that used the same
+naming is safe: start the pipe with `Source.StartFrom: Beginning` on a **new** consumer group. Everything already written
+is found and skipped (no overwrite, no error); only what the old sink had not yet written is added. Then stop the old sink.
