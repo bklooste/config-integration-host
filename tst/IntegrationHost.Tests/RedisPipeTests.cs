@@ -181,9 +181,9 @@ public class RedisPipeTests(RedisFixture redis) : IClassFixture<RedisFixture>
         await using var receiver = await Receiver.StartAsync();
         var db = await Db();
         await db.StreamAddAsync(stream, [new("type", "Other"), new("data", """{"n":1}""")]);
-        await db.StreamAddAsync(stream, [new("type", "Audit"), new("data", """{"n":2}""")]);
+        await db.StreamAddAsync(stream, [new("type", "OrderPlaced"), new("data", """{"n":2}""")]);
 
-        await using var host = Host(receiver, stream, "g", ("Pipes:0:Source:TypeFilter:0", "Audit"));
+        await using var host = Host(receiver, stream, "g", ("Pipes:0:Source:TypeFilter:0", "OrderPlaced"));
         using var client = host.CreateClient();
 
         Assert.True(await Receiver.WaitFor(() => receiver.Calls.Count >= 1, Timeout));
