@@ -4,10 +4,10 @@ namespace IntegrationHost.Tests;
 
 public class PipeValidatorTests
 {
-    private static PipeConfig Good(string name = "audit") => new()
+    private static PipeConfig Good(string name = "orders") => new()
     {
         Name = name,
-        Source = new() { Transport = "redis", Stream = "audit", ConsumerGroup = "int-audit" },
+        Source = new() { Transport = "redis", Stream = "orders", ConsumerGroup = "int-orders" },
         Destination = new() { Transport = "http", Url = "https://partner.example/hook" },
     };
 
@@ -51,7 +51,7 @@ public class PipeValidatorTests
     public void Handler_maps_are_rejected_until_supported()
     {
         var p = Good();
-        p.Map = new() { Handler = "AuditToSiem" };
+        p.Map = new() { Handler = "OrderToPartner" };
         Assert.Contains(PipeValidator.Validate([p]), e => e.Contains("Map.Handler"));
     }
 
@@ -59,7 +59,7 @@ public class PipeValidatorTests
     public void A_template_map_needs_a_rule_engine_url_and_a_valid_no_match_mode()
     {
         var p = Good();
-        p.Map = new() { Template = "audit-siem-v1" };
+        p.Map = new() { Template = "order-partner-v1" };
         Assert.Contains(PipeValidator.Validate([p], new() { RedisConnectionString = "x" }), e => e.Contains("RuleEngineUrl"));
         Assert.Empty(PipeValidator.Validate([p], new() { RedisConnectionString = "x", RuleEngineUrl = "http://rules:8080" }));
 

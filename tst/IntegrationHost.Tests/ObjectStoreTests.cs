@@ -30,29 +30,29 @@ public class ObjectStoreTests(AzuriteFixture azurite, RedisFixture redis) : ICla
 {
     private static string Unique(string p) => p + "-" + Guid.NewGuid().ToString("N")[..8];
 
-    private static Envelope Msg(string id, string body = """{"n":1}""", string? type = "Orange.Models.Bet.Placed", string? correlation = "corr-1", string? partition = "pk-") =>
+    private static Envelope Msg(string id, string body = """{"n":1}""", string? type = "Acme.Models.Order.Placed", string? correlation = "corr-1", string? partition = "pk-") =>
         new(id, body, type, new Dictionary<string, string>
         {
             ["correlationId"] = correlation ?? "", ["partitionKey"] = partition ?? "",
         }.Where(kv => kv.Value != "").ToDictionary());
 
-    private DestinationConfig BlobConfig(string container, string template = "{type}-{correlationId}-{partitionKey}{id}", string strip = "Orange.Models.") => new()
+    private DestinationConfig BlobConfig(string container, string template = "{type}-{correlationId}-{partitionKey}{id}", string strip = "Acme.Models.") => new()
     {
         Transport = "objectstore", Backend = "azure-blob", ConnectionString = azurite.ConnectionString,
         Container = container, NameTemplate = template, StripTypePrefix = strip,
     };
 
-    /// <summary>The plat-events2blob naming formula, verbatim, as the parity oracle.</summary>
+    /// <summary>The legacy blob-sink naming formula, verbatim, as the parity oracle.</summary>
     private static string LegacyName(string type, string correlationId, string partitionKey, string offset) =>
-        type.Replace("Orange.Models.", string.Empty) + "-" + correlationId + "-" + partitionKey + offset;
+        type.Replace("Acme.Models.", string.Empty) + "-" + correlationId + "-" + partitionKey + offset;
 
     [Fact]
-    public async Task Parity_with_events2blob_same_object_name_and_bytes()
+    public async Task Parity_with_legacy_blob_sink_same_object_name_and_bytes()
     {
         var container = Unique("parity");
         var cfg = BlobConfig(container);
         var dest = new ObjectStoreDestination(new AzureBlobStore(cfg), cfg);
-        var m = Msg("1712345678901-0", body: """{"bet":"abc","stake":12.5,"note":"héllo ✓"}""");
+        var m = Msg("1712345678901-0", body: """{"order":"abc","total":12.5,"note":"héllo ✓"}""");
 
         await dest.SendAsync(m, default);
 
@@ -72,7 +72,7 @@ public class ObjectStoreTests(AzuriteFixture azurite, RedisFixture redis) : ICla
         await dest.SendAsync(Msg("5-0", body: "first"), default);
         await dest.SendAsync(Msg("5-0", body: "second"), default); // must not throw (legacy swallowed 409) nor overwrite
 
-        var blob = new BlobContainerClient(azurite.ConnectionString, container).GetBlobClient(LegacyName("Orange.Models.Bet.Placed", "corr-1", "pk-", "5-0"));
+        var blob = new BlobContainerClient(azurite.ConnectionString, container).GetBlobClient(LegacyName("Acme.Models.Order.Placed", "corr-1", "pk-", "5-0"));
         Assert.Equal("first", (await blob.DownloadContentAsync(TestContext.Current.CancellationToken)).Value.Content.ToString());
     }
 
@@ -83,7 +83,7 @@ public class ObjectStoreTests(AzuriteFixture azurite, RedisFixture redis) : ICla
         var stream = Unique("s");
         var mux = await ConnectionMultiplexer.ConnectAsync(redis.ConnectionString);
         var id = (string)(await mux.GetDatabase().StreamAddAsync(stream,
-            [new("data", """{"x":1}"""), new("type", "Orange.Models.Bet.Placed"), new("correlationId", "c9"), new("partitionKey", "p")]))!;
+            [new("data", """{"x":1}"""), new("type", "Acme.Models.Order.Placed"), new("correlationId", "c9"), new("partitionKey", "p")]))!;
 
         await using var host = new WebApplicationFactory<Program>().WithWebHostBuilder(b =>
         {
@@ -99,11 +99,11 @@ public class ObjectStoreTests(AzuriteFixture azurite, RedisFixture redis) : ICla
             b.UseSetting("Pipes:0:Destination:ConnectionString", azurite.ConnectionString);
             b.UseSetting("Pipes:0:Destination:Container", container);
             b.UseSetting("Pipes:0:Destination:NameTemplate", "{type}-{correlationId}-{partitionKey}{id}");
-            b.UseSetting("Pipes:0:Destination:StripTypePrefix", "Orange.Models.");
+            b.UseSetting("Pipes:0:Destination:StripTypePrefix", "Acme.Models.");
         });
         using var client = host.CreateClient();
 
-        var blob = new BlobContainerClient(azurite.ConnectionString, container).GetBlobClient(LegacyName("Orange.Models.Bet.Placed", "c9", "p", id));
+        var blob = new BlobContainerClient(azurite.ConnectionString, container).GetBlobClient(LegacyName("Acme.Models.Order.Placed", "c9", "p", id));
         Assert.True(await Receiver.WaitFor(() => blob.Exists().Value, TimeSpan.FromSeconds(20)));
         Assert.Equal("""{"x":1}""", (await blob.DownloadContentAsync(TestContext.Current.CancellationToken)).Value.Content.ToString());
     }
@@ -151,8 +151,130 @@ public class ObjectStoreTests(AzuriteFixture azurite, RedisFixture redis) : ICla
         Assert.Empty(PipeValidator.Validate([P(_ => { })], new() { RedisConnectionString = "x" }));
         Assert.Contains(PipeValidator.Validate([P(d => d.Backend = "s3")]), e => e.Contains("Backend"));
         Assert.Contains(PipeValidator.Validate([P(d => d.Container = "")]), e => e.Contains("Container"));
-        Assert.Contains(PipeValidator.Validate([P(d => d.ServiceUri = "https://a")]), e => e.Contains("exactly one"));
+        Assert.Empty(PipeValidator.Validate([P(d => d.ServiceUri = "https://a")])); // uri + connection string = endpoint + shared-key credentials
+        Assert.Contains(PipeValidator.Validate([P(d => { d.ConnectionString = ""; })]), e => e.Contains("needs ConnectionString, or ServiceUri"));
         Assert.Contains(PipeValidator.Validate([P(d => d.NameTemplate = "{type}")]), e => e.Contains("{id}"));
         Assert.Contains(PipeValidator.Validate([P(d => d.NameTemplate = "{id}{bogus}")]), e => e.Contains("{bogus}"));
+    }
+
+    [Fact]
+    public async Task A_partitioned_stream_with_one_byte_fields_and_a_binary_body_lands_byte_identical_under_the_legacy_names()
+    {
+        // The shape of a stream written by a partitioned, compact-field producer: key "...:{topic}:N", fields b/t/k/c/p.
+        var topic = Unique("topic");
+        var container = Unique("compact");
+        string StreamKey(int part) => $"env:re:s:{{{topic}}}:{part}";
+        var db = (await ConnectionMultiplexer.ConnectAsync(redis.ConnectionString)).GetDatabase();
+        byte[] binary = [0xFF, 0x00, 0xC3, 0x28, 0x7B, 0x22, 0x80]; // not valid UTF-8
+        var sent = new List<(string Id, string Corr, string Key, byte[] Body)>();
+        for (var part = 0; part < 2; part++)
+        {
+            var body = part == 0 ? """{"a":1}"""u8.ToArray() : binary;
+            var id = (string)(await db.StreamAddAsync(StreamKey(part),
+                [new("b", body), new("t", "Acme.Models.Order.Placed"), new("k", $"key{part}"), new("c", $"corr{part}"),
+                 new("p", "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01")]))!;
+            sent.Add((id, $"corr{part}", $"key{part}", body));
+        }
+
+        WebApplicationFactory<Program> Host(string group) => new WebApplicationFactory<Program>().WithWebHostBuilder(b =>
+        {
+            b.UseSetting("Host:RedisConnectionString", redis.ConnectionString);
+            b.UseSetting("Host:PollIntervalMs", "20");
+            b.UseSetting("Pipes:0:Name", "compact");
+            b.UseSetting("Pipes:0:Source:Transport", "redis");
+            b.UseSetting("Pipes:0:Source:Stream", $"env:re:s:{{{topic}}}:{{partition}}");
+            b.UseSetting("Pipes:0:Source:Partitions", "2");
+            b.UseSetting("Pipes:0:Source:ConsumerGroup", group);
+            b.UseSetting("Pipes:0:Source:StartFrom", "Beginning");
+            b.UseSetting("Pipes:0:Source:PayloadField", "b");
+            b.UseSetting("Pipes:0:Source:TypeField", "t");
+            b.UseSetting("Pipes:0:Source:HeaderFields:c", "correlationId");
+            b.UseSetting("Pipes:0:Source:HeaderFields:k", "partitionKey");
+            b.UseSetting("Pipes:0:Source:HeaderFields:p", "traceparent");
+            b.UseSetting("Pipes:0:Destination:Transport", "objectstore");
+            b.UseSetting("Pipes:0:Destination:Backend", "azure-blob");
+            b.UseSetting("Pipes:0:Destination:ConnectionString", azurite.ConnectionString);
+            b.UseSetting("Pipes:0:Destination:Container", container);
+            b.UseSetting("Pipes:0:Destination:NameTemplate", "{type}-{correlationId}-{partitionKey}{entryId}");
+            b.UseSetting("Pipes:0:Destination:StripTypePrefix", "Acme.Models.");
+        });
+
+        bool Drained(string group) => Enumerable.Range(0, 2).All(part =>
+            db.StreamPending(StreamKey(part), group).PendingMessageCount == 0
+            && db.StreamGroupInfo(StreamKey(part)).First(g => g.Name == group).LastDeliveredId == db.StreamInfo(StreamKey(part)).LastGeneratedId);
+
+        var containerClient = new BlobContainerClient(azurite.ConnectionString, container);
+        await using (var host = Host("g"))
+        {
+            using var client = host.CreateClient();
+            Assert.True(await Receiver.WaitFor(() => Drained("g"), TimeSpan.FromSeconds(20)));
+        }
+
+        Assert.Equal(2, containerClient.GetBlobs().Count());
+        foreach (var m in sent)
+        {
+            var blob = containerClient.GetBlobClient(LegacyName("Acme.Models.Order.Placed", m.Corr, m.Key, m.Id)); // legacy name: plain entry id, no partition prefix
+            Assert.True(await blob.ExistsAsync(TestContext.Current.CancellationToken), blob.Name);
+            Assert.Equal(m.Body, (await blob.DownloadContentAsync(TestContext.Current.CancellationToken)).Value.Content.ToArray());
+        }
+
+        // Cutover replay: a brand-new consumer group over the whole stream finds every object already there; create-only writes make it a no-op.
+        var before = containerClient.GetBlobs().ToDictionary(b => b.Name, b => b.Properties.ETag);
+        await using (var host = Host("g-replay"))
+        {
+            using var client = host.CreateClient();
+            Assert.True(await Receiver.WaitFor(() => Drained("g-replay"), TimeSpan.FromSeconds(20)));
+        }
+        Assert.Equal(before, containerClient.GetBlobs().ToDictionary(b => b.Name, b => b.Properties.ETag));
+    }
+}
+
+public class ObjectStoreSharedKeyTests(AzuriteFixture azurite) : IClassFixture<AzuriteFixture>
+{
+    [Fact]
+    public async Task Service_uri_with_account_name_and_key_writes_to_the_account()
+    {
+        var container = "sk-" + Guid.NewGuid().ToString("N")[..8];
+        var conn = azurite.ConnectionString.Split(';').Select(p => p.Split('=', 2)).Where(p => p.Length == 2).ToDictionary(p => p[0], p => p[1]);
+        var cfg = new DestinationConfig
+        {
+            Transport = "objectstore", Backend = "azure-blob", Container = container, NameTemplate = "{id}",
+            ServiceUri = conn["BlobEndpoint"], AccountName = conn["AccountName"], AccountKey = conn["AccountKey"],
+        };
+        Assert.Empty(PipeValidator.Validate([new PipeConfig { Name = "p", Source = new() { Transport = "redis", Stream = "s", ConsumerGroup = "g" }, Destination = cfg }]));
+
+        await new ObjectStoreDestination(new AzureBlobStore(cfg), cfg).SendAsync(new Envelope("1-0", "x", null, new Dictionary<string, string>()), default);
+
+        Assert.True(await new BlobContainerClient(azurite.ConnectionString, container).GetBlobClient("1-0").ExistsAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Service_uri_with_a_connection_string_takes_credentials_from_the_connection_string()
+    {
+        var container = "cs-" + Guid.NewGuid().ToString("N")[..8];
+        var conn = azurite.ConnectionString.Split(';').Select(p => p.Split('=', 2)).Where(p => p.Length == 2).ToDictionary(p => p[0], p => p[1]);
+        // A table-style connection string for the same account (no BlobEndpoint): only its AccountName/AccountKey matter.
+        var cfg = new DestinationConfig
+        {
+            Transport = "objectstore", Backend = "azure-blob", Container = container, NameTemplate = "{id}",
+            ServiceUri = conn["BlobEndpoint"], ConnectionString = $"DefaultEndpointsProtocol=http;AccountName={conn["AccountName"]};AccountKey={conn["AccountKey"]};TableEndpoint=http://unused/",
+        };
+
+        await new ObjectStoreDestination(new AzureBlobStore(cfg), cfg).SendAsync(new Envelope("2-0", "x", null, new Dictionary<string, string>()), default);
+
+        Assert.True(await new BlobContainerClient(azurite.ConnectionString, container).GetBlobClient("2-0").ExistsAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public void Account_key_needs_a_name_and_a_service_uri()
+    {
+        PipeConfig P(Action<DestinationConfig> t)
+        {
+            var d = new DestinationConfig { Transport = "objectstore", Backend = "azure-blob", Container = "c", ServiceUri = "https://a.blob.core.windows.net", NameTemplate = "{id}" };
+            t(d);
+            return new() { Name = "p", Source = new() { Transport = "redis", Stream = "s", ConsumerGroup = "g" }, Destination = d };
+        }
+        Assert.Contains(PipeValidator.Validate([P(d => d.AccountKey = "k")]), e => e.Contains("together"));
+        Assert.Contains(PipeValidator.Validate([P(d => { d.ServiceUri = ""; d.ConnectionString = "x"; d.AccountName = "a"; d.AccountKey = "k"; })]), e => e.Contains("needs ServiceUri"));
     }
 }

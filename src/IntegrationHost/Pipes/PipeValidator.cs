@@ -29,6 +29,8 @@ public static class PipeValidator
                 case "redis":
                     if (string.IsNullOrWhiteSpace(s.Stream)) Err("Source.Stream is required for a redis source.");
                     if (string.IsNullOrWhiteSpace(s.ConsumerGroup)) Err("Source.ConsumerGroup is required.");
+                    if (s.Partitions is < 1 or > 1024) Err("Source.Partitions must be 1-1024.");
+                    if (s.Partitions > 1 && !s.Stream.Contains("{partition}", StringComparison.Ordinal)) Err("Source.Stream must contain {partition} when Partitions > 1.");
                     if (s.ClaimIdleSeconds < 1) Err("Source.ClaimIdleSeconds must be at least 1.");
                     if (!s.StartFrom.Equals("End", StringComparison.OrdinalIgnoreCase) && !s.StartFrom.Equals("Beginning", StringComparison.OrdinalIgnoreCase))
                         Err($"Source.StartFrom '{s.StartFrom}' must be End or Beginning.");
@@ -85,6 +87,8 @@ public static class PipeValidator
                 && (s.Transport.Equals("redis", StringComparison.OrdinalIgnoreCase) || d.Transport.Equals("redis", StringComparison.OrdinalIgnoreCase)))
                 Err("uses redis but Host:RedisConnectionString is not set.");
 
+            if (p.Concurrency is < 1 or > 64) Err("Concurrency must be 1-64.");
+
             var r = p.Retry;
             if (r.MaxAttempts < 1) Err("Retry.MaxAttempts must be at least 1.");
             if (r.InitialDelayMs < 0 || r.MaxDelayMs < r.InitialDelayMs) Err("Retry delays must satisfy 0 <= InitialDelayMs <= MaxDelayMs.");
@@ -93,19 +97,25 @@ public static class PipeValidator
         return errors;
     }
 
-    private static readonly HashSet<string> NameTokens = new(StringComparer.Ordinal) { "id", "type", "correlationId", "partitionKey", "date" };
+    private static readonly HashSet<string> NameTokens = new(StringComparer.Ordinal) { "id", "entryId", "type", "correlationId", "partitionKey", "date" };
 
     private static void ValidateObjectStore(DestinationConfig d, Action<string> err)
     {
         var backend = d.Backend.ToLowerInvariant();
         if (backend is not ("azure-blob" or "file")) err($"Destination.Backend '{d.Backend}' must be azure-blob or file.");
         if (string.IsNullOrWhiteSpace(d.Container)) err("Destination.Container is required for an objectstore destination.");
-        if (backend == "azure-blob" && string.IsNullOrWhiteSpace(d.ConnectionString) == string.IsNullOrWhiteSpace(d.ServiceUri))
-            err("Destination (azure-blob) needs exactly one of ConnectionString or ServiceUri.");
+        var hasCs = !string.IsNullOrWhiteSpace(d.ConnectionString);
+        var hasUri = !string.IsNullOrWhiteSpace(d.ServiceUri);
+        if (backend == "azure-blob" && !hasCs && !hasUri) err("Destination (azure-blob) needs ConnectionString, or ServiceUri (optionally with ConnectionString or AccountName/AccountKey for credentials).");
+        if (hasCs && hasUri && !string.IsNullOrWhiteSpace(d.AccountKey)) err("Destination: give credentials as ConnectionString or AccountName/AccountKey, not both.");
+        var hasName = !string.IsNullOrWhiteSpace(d.AccountName);
+        var hasKey = !string.IsNullOrWhiteSpace(d.AccountKey);
+        if (hasName != hasKey) err("Destination.AccountName and AccountKey must be set together.");
+        if (hasKey && !hasUri) err("Destination.AccountKey needs ServiceUri (shared-key access to that account).");
         var tokens = System.Text.RegularExpressions.Regex.Matches(d.NameTemplate, @"\{([^{}]*)\}").Select(m => m.Groups[1].Value).ToList();
         foreach (var t in tokens.Where(t => !NameTokens.Contains(t)).Distinct())
             err($"Destination.NameTemplate has unknown token '{{{t}}}' (allowed: {string.Join(", ", NameTokens.Select(n => "{" + n + "}"))}).");
-        if (!tokens.Contains("id")) err("Destination.NameTemplate must contain {id}, or distinct messages would overwrite/skip each other.");
+        if (!tokens.Contains("id") && !tokens.Contains("entryId")) err("Destination.NameTemplate must contain {id} or {entryId}, or distinct messages would overwrite/skip each other.");
     }
 
     private static void ValidateEventHubs(string side, string connectionString, string ns, string hub, Action<string> err)
