@@ -16,6 +16,8 @@ jobs:
   test:
     runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || 'lode-ci' }}
     env:
+      # Box runners use host networking; without this Testcontainers reports the Docker gateway IP.
+      TESTCONTAINERS_HOST_OVERRIDE: 127.0.0.1
       # Unique per run: the box runners share one Docker daemon.
       SMOKE: smoke-${{ github.run_id }}-${{ github.run_attempt }}
       COMPOSE_PROJECT_NAME: ci-${{ github.run_id }}-${{ github.run_attempt }}
