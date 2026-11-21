@@ -1,7 +1,7 @@
 # config-integration-host
 
 [![CI](https://github.com/bklooste/config-integration-host/actions/workflows/ci.yml/badge.svg)](https://github.com/bklooste/config-integration-host/actions/workflows/ci.yml)
-[![Docker Hub](https://img.shields.io/docker/v/kaisea/config-integration-host?label=docker%20hub)](https://hub.docker.com/r/kaisea/config-integration-host)
+[![Docker Hub](https://img.shields.io/docker/v/bklooste/config-integration-host?label=docker%20hub)](https://hub.docker.com/r/bklooste/config-integration-host)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 Config-defined integration pipes: move messages between Redis streams, Azure Event Hubs and HTTP endpoints with at-least-once delivery, a dedupe key on every message, retry with backoff, and a failure policy you choose per pipe. Add, change or remove a pipe by editing config — no code, no new service. (Early version: `redis` and `eventhubs` sources, `http`, `redis`, `eventhubs` and `objectstore` (Azure Blob / file) destinations, passthrough and rule-engine template maps. See [Roadmap](#roadmap).)
@@ -144,7 +144,7 @@ to strip internal fields before data leaves.
 ### Validate before you deploy
 
 ```bash
-docker run --rm -v $PWD/appsettings.json:/app/appsettings.json kaisea/config-integration-host:latest --validate
+docker run --rm -v $PWD/appsettings.json:/app/appsettings.json bklooste/config-integration-host:latest --validate
 # OK: 1 pipe(s) valid, 1 enabled.        (exit 0)
 ```
 

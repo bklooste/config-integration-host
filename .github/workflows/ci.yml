@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 env:
-  IMAGE: docker.io/kaisea/config-integration-host
+  IMAGE: docker.io/bklooste/config-integration-host
 
 jobs:
   test:

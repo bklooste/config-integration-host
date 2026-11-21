@@ -14,7 +14,7 @@ services:
     image: mendhak/http-https-echo:37
 
   service:
-    image: kaisea/config-integration-host:latest
+    image: bklooste/config-integration-host:latest
     # build: .          # uncomment to build from source instead of pulling
     ports:
       - "8080:8080"

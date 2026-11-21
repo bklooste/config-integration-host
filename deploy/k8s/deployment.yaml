@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: service
-          image: kaisea/config-integration-host:1.0   # pin an explicit version
+          image: bklooste/config-integration-host:1.0   # pin an explicit version
           ports:
             - containerPort: 8080
           env:
