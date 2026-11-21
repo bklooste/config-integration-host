@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: service
-          image: ghcr.io/bklooste/config-integration-host/service:1.0   # pin an explicit version
+          image: kaisea/config-integration-host:1.0   # pin an explicit version
           ports:
             - containerPort: 8080
           env:
